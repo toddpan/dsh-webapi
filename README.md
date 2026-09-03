@@ -45,6 +45,7 @@ DeepSeek Harness (DSH) Web Service API 插件：
 | | `GET` | `/models/default` | 获取全局默认模型 |
 | | `PUT` | `/models/default` | 更新全局默认模型 |
 | | `GET` | `/providers` | 查询注册的 LLM 提供商 |
+| | `GET` | `/presets` | 查询可用 Agent Preset 清单 |
 | **Settings** | `GET` | `/settings` | 获取系统设置配置命名空间 |
 | | `PATCH` | `/settings/:namespace` | 更新指定命名空间配置 |
 | **Docs** | `GET` | `/docs` | 内置交互式 API 测试页面 |

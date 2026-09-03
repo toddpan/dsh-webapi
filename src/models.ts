@@ -157,7 +157,38 @@ export function registerModelRoutes(ctx: Context, router: any): void {
     }
   })
 
-  // 5. 获取系统设置列表
+  // 5. 列出可用 Agent Preset（供会话创建时的 agentPreset 参数选择）
+  router.get('/presets', async (_req: IncomingMessage, res: ServerResponse) => {
+    try {
+      const presetsService = ctx.get('agentPresets') as any
+      if (!presetsService) {
+        sendJson(res, 503, { ok: false, error: 'Agent presets service unavailable', code: 'SERVICE_UNAVAILABLE' })
+        return
+      }
+      let presets: any[] = []
+      if (typeof presetsService.remoteExportList === 'function') {
+        const roster = await presetsService.remoteExportList()
+        presets = roster?.presets || []
+      } else if (typeof presetsService.list === 'function') {
+        presets = await presetsService.list()
+      }
+      sendJson(res, 200, {
+        ok: true,
+        data: {
+          presets: presets.map((p: any) => ({
+            id: p.id,
+            name: p.name,
+            description: p.description,
+            isDefault: Boolean(p.isDefault),
+          })),
+        },
+      })
+    } catch (err: any) {
+      sendJson(res, 500, { ok: false, error: err.message })
+    }
+  })
+
+  // 6. 获取系统设置列表
   router.get('/settings', async (_req: IncomingMessage, res: ServerResponse) => {
     try {
       const settingsController = ctx.get('settingsController') as any
@@ -173,7 +204,7 @@ export function registerModelRoutes(ctx: Context, router: any): void {
     }
   })
 
-  // 6. 更新指定命名空间的系统设置
+  // 7. 更新指定命名空间的系统设置
   router.patch('/settings/:namespace', async (_req: IncomingMessage, res: ServerResponse, params: Record<string, string>, _query: any, body: any) => {
     try {
       const settingsController = ctx.get('settingsController') as any

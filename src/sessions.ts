@@ -198,12 +198,30 @@ export function registerSessionRoutes(ctx: Context, router: any): void {
       // 如果指定了特定模型
       if (body.provider && body.model && sessionController?.selectModel) {
         try {
+          // harness 的 selectModel 会无条件把选择持久化为部署全局默认；
+          // API 建会话属会话级选择，先记住原默认，设置后立即恢复，避免劫持
+          const defaultModelService = ctx.get('agentDefaultModel') as any
+          const previousDefault =
+            defaultModelService && typeof defaultModelService.currentSelection === 'function'
+              ? defaultModelService.currentSelection()
+              : undefined
           await sessionController.selectModel({
             sessionId: createdSessionId,
             provider: body.provider,
             model: body.model,
             reasoningEffort: body.reasoningEffort,
           })
+          if (
+            previousDefault &&
+            defaultModelService &&
+            typeof defaultModelService.saveSelection === 'function'
+          ) {
+            try {
+              await defaultModelService.saveSelection(previousDefault)
+            } catch (restoreErr: any) {
+              console.warn('[dsh-web-service] restore previous default model failed:', restoreErr?.message)
+            }
+          }
         } catch (e: any) {
           // 返回警告但会话仍创建成功
         }
