@@ -63,5 +63,40 @@ dev_inject_plugin {"dir": "/path/to/dsh-web-service"}
 dev_reload_package {"packageName": "dsh-web-service"}
 ```
 
+## SKILL：让 AI 智能体学会调用本 API
+
+本仓库自带一份 DSH 原生 SKILL（`skills/dsh-web-service/SKILL.md`），安装后 AI 智能体会自动发现并掌握全部接口的用法（触发词：HTTP 操作 DSH、三方集成、OpenAI 兼容调用等），会话内也可用 `/dsh-web-service` 直接调用。
+
+### 一键在线安装（推荐）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/toddpan/dsh-webapi/main/scripts/install-skill.sh | bash
+```
+
+安装到用户级 skill 目录 `~/.dsh/skills/dsh-web-service/`，DSH 的 skill-filesystem 提供方会热发现（无需重启），下一个会话即可用。
+
+### 可选参数
+
+```bash
+# 安装到指定目录（项目级 .dsh/skills 或 .agents/skills）
+curl -fsSL .../install-skill.sh | bash -s -- --dir /path/to/project/.dsh/skills
+
+# 指定分支 / 仓库
+curl -fsSL .../install-skill.sh | bash -s -- --branch dev
+curl -fsSL .../install-skill.sh | bash -s -- --repo other/dsh-webapi
+
+# 卸载
+curl -fsSL .../install-skill.sh | bash -s -- uninstall
+# 或本地：bash install-skill.sh uninstall
+```
+
+脚本行为：下载 SKILL.md → 校验 frontmatter 合法性 → 安装到目标目录 → 探测本机 3080/3000 端口的 DSH Web Service 是否在线并提示。幂等可重复执行。
+
+### 本地安装（仓库内）
+
+```bash
+bash scripts/install-skill.sh
+```
+
 ## License
 BSD-3-Clause

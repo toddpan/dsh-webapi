@@ -26,8 +26,13 @@ RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 
 # ---------- 参数解析 ----------
 TARGET_DIR="${HOME}/.dsh/skills"
+MODE="install"
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    uninstall)
+      MODE="uninstall"
+      shift
+      ;;
     --dir)
       TARGET_DIR="$2"
       shift 2
@@ -57,7 +62,7 @@ INSTALL_DIR="${TARGET_DIR%/}/${SKILL_NAME}"
 SKILL_FILE="${INSTALL_DIR}/SKILL.md"
 
 # ---------- 卸载入口 ----------
-if [[ "${1:-}" == "uninstall" || "${DSH_SKILL_UNINSTALL:-}" == "1" ]]; then
+if [[ "${MODE}" == "uninstall" || "${DSH_SKILL_UNINSTALL:-}" == "1" ]]; then
   if [[ -d "${INSTALL_DIR}" ]]; then
     rm -rf "${INSTALL_DIR}"
     echo "✓ 已卸载 SKILL: ${INSTALL_DIR}"
