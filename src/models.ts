@@ -20,21 +20,34 @@ export function registerModelRoutes(ctx: Context, router: any): void {
       // 优先从 sessionController.modelCatalog 读取
       if (sessionController && typeof sessionController.modelCatalog === 'function') {
         const catalog = await sessionController.modelCatalog()
-        if (catalog && catalog.providers) {
-          for (const provider of catalog.providers) {
-            for (const m of provider.models) {
+        if (catalog && Array.isArray(catalog.groups)) {
+          for (const group of catalog.groups) {
+            for (const m of group.models) {
               const isDefault = defaultSelection &&
-                defaultSelection.provider === provider.id &&
+                defaultSelection.provider === group.id &&
                 defaultSelection.model === m.id
 
               models.push({
                 id: m.id,
-                provider: provider.id,
+                provider: group.id,
                 name: m.name || m.id,
                 description: m.description,
-                contextLimit: m.contextLimit,
-                inputModalities: m.inputModalities,
+                reasoning: m.reasoning,
                 isDefault: Boolean(isDefault),
+              })
+            }
+          }
+        }
+        // 路由型 provider（没有模型目录但可直接路由）
+        if (Array.isArray(catalog.routableProviders)) {
+          for (const pid of catalog.routableProviders) {
+            if (!models.some(m => m.provider === pid)) {
+              models.push({
+                id: pid,
+                provider: pid,
+                name: pid,
+                isDefault: defaultSelection?.provider === pid,
+                routeOnly: true,
               })
             }
           }
@@ -121,11 +134,22 @@ export function registerModelRoutes(ctx: Context, router: any): void {
       }
 
       const providers = llmService.listProviders()
-      const result: ProviderItem[] = providers.map((p: any) => ({
-        id: p.id,
-        displayName: p.displayName || p.id,
-        models: p.models || [],
-      }))
+      const result: ProviderItem[] = []
+      for (const p of providers) {
+        // 从 LLM 注册表读取每个 provider 的模型清单
+        let modelIds: string[] = []
+        try {
+          if (typeof llmService.listModels === 'function') {
+            const models = await llmService.listModels(p.id)
+            modelIds = (models || []).map((m: any) => m.id || m)
+          }
+        } catch {}
+        result.push({
+          id: p.id,
+          displayName: p.name || p.displayName || p.id,
+          models: modelIds,
+        })
+      }
 
       sendJson(res, 200, { ok: true, data: result })
     } catch (err: any) {

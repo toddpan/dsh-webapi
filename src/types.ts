@@ -104,6 +104,12 @@ export interface ModelItem {
   description?: string
   contextLimit?: number
   inputModalities?: string[]
+  reasoning?: {
+    efforts: Array<{ id: string; name: string; description?: string }>
+    defaultEffort?: string
+  }
+  /** 路由型 provider：无模型目录但可直接作为 provider/model 路由使用 */
+  routeOnly?: boolean
   isDefault?: boolean
 }
 
