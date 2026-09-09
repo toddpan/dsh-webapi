@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/dsh-web-service",
-  "version": "0.0.3",
+  "version": "0.1.4",
   "description": "DSH Web Service API 插件，对外提供 RESTful & SSE 接口",
   "private": true,
   "type": "module",
@@ -23,5 +23,10 @@
   "scripts": {
     "build": "bash scripts/build.sh",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }

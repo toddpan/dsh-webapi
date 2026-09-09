@@ -8,18 +8,24 @@ whenToUse: 用户要求通过 HTTP/REST API 调用 DSH、集成三方系统、�
 
 本机 DSH 已由插件 `@dsh-external/dsh-web-service` 暴露为 Web Service。所有能力通过 HTTP 访问，第三方系统、脚本或任何 OpenAI SDK 均可直接调用。
 
-## 服务地址
+## 服务地址（按访问路径二选一）
 
-- **Base URL**：`http://127.0.0.1:3080/api/v1`（DSH 主 webserver 端口，默认 3080）
-- **交互式文档**：`http://127.0.0.1:3080/api/v1/docs`
-- **OpenAPI 规范**：`http://127.0.0.1:3080/api/v1/openapi.json`
+| 访问路径 | Base URL |
+|---|---|
+| DSH 本机 / 同内网 | `http://127.0.0.1:3080/api/v1`（DSH 主 webserver 端口，默认 3080） |
+| **经 oneNat 隧道** | `http://<隧道host>:<映射public_port>/api/v1` —— 从 oneNat `/api/v1/resources` 里找 `local=127.0.0.1:3080` 的映射，取其 `public_url` 的 host:port 替换即可；tcp 转发可直接承载 HTTP，路径不变 |
+
+- **交互式文档**：`<Base>/docs`
+- **OpenAPI 规范**：`<Base>/openapi.json`
 - **鉴权**：若部署时配置了 `apiKey`，请求需带 `Authorization: Bearer <key>` 或 `X-API-Key: <key>` 头；未配置则免鉴权。
 - **CORS**：默认开启。
+- **离线判断**：经隧道访问前先看该映射 `online`；离线则直接报告，不要请求。
 
 快速自检：
 
 ```bash
-curl -s http://127.0.0.1:3080/api/v1/system/status
+curl -s http://127.0.0.1:3080/api/v1/system/status          # 本机
+curl -s http://<隧道host>:<public_port>/api/v1/system/status # 经隧道
 ```
 
 ## 统一响应约定
@@ -65,8 +71,24 @@ curl -s -X POST http://127.0.0.1:3080/api/v1/workspaces \
 | DELETE | `/sessions/:id` | 删除/归档会话并释放 Agent |
 | GET | `/sessions/:id/history` | 历史消息分页；`?maxMessages=50`、`?beforeSeq=` |
 | POST | `/sessions/:id/cancel` | 中止当前轮次 |
+| POST | `/sessions/:id/files` | **上传文件到该会话工作区**：`multipart/form-data`（多文件，字段名任意带 filename 即保存）或原始字节流 + `?filename=`/`X-Filename` 头；同名自动 `-1/-2` 去重永不覆盖；返回 `files[].path` 绝对路径 |
+| GET | `/sessions/:id/files` | **列出工作区目录**：`?path=相对子目录` 逐层浏览；返回 `entries[]`（name/type dir\|file\|link/size/mtime/path，目录在前），`entry.path` 可继续用于浏览或下载 |
+| GET | `/sessions/:id/files/download` | **下载工作区文件**：`?path=相对路径`；`?inline=1` 内联预览（MIME 按扩展名）；禁止 `../` 越界 |
 
-典型流程：创建 → 对话 → 查历史 → 归档。
+典型流程：创建 → （上传文件）→ 对话 → 查历史 → 归档。
+
+上传示例：
+
+```bash
+# multipart 多文件
+curl -X POST http://127.0.0.1:3080/api/v1/sessions/$SID/files \
+  -F "files=@./报告.pdf" -F "files=@./data.csv"
+# 原始字节流 + 文件名
+curl -X POST "http://127.0.0.1:3080/api/v1/sessions/$SID/files?filename=dump.bin" \
+  -H "Content-Type: application/octet-stream" --data-binary @./dump.bin
+```
+
+上传后把返回的 `path` 写进对话，会话中的 AI 即可用文件工具（fs/shell）直接读取。上限默认 100MB（配置 `maxUploadBytes`）。
 
 ```bash
 SID=$(curl -s -X POST http://127.0.0.1:3080/api/v1/sessions \
@@ -165,6 +187,7 @@ print(r.choices[0].message.content)
 | 现象 | 处理 |
 |---|---|
 | 连接拒绝 | DSH 未启动或端口非 3080；先查 `system/status` |
+| 经隧道超时/拒绝 | 隧道离线：查 oneNat resources 里该映射 `online`，离线报告用户，不要重试 |
 | 401 | 配置了 `apiKey`；请求带 `Authorization: Bearer <key>` |
 | 模型选择报 no adapter | `provider/model` 非法；先 `GET /models` 校验 |
 | 新会话模型不对 | 全局默认被改过；查 `GET /models/default`，或创建时显式传 `provider/model` |

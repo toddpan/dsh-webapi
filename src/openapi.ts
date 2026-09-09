@@ -234,6 +234,106 @@ function generateOpenApiSpec(prefix: string) {
           responses: { 200: { description: 'SSE 会话事件流' } },
         },
       },
+      '/sessions/{id}/files': {
+        get: {
+          summary: '列出会话工作区目录',
+          description: '列出该会话 cwd（或 ?path= 指定的相对子目录）下的条目，目录在前、按名称排序；?path= 逐层浏览。',
+          tags: ['Sessions'],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'path', in: 'query', required: false, schema: { type: 'string' }, description: '相对会话工作区的子目录，默认根目录' },
+          ],
+          responses: {
+            200: {
+              description: '目录条目列表（name/type/size/mtime/path）',
+              content: { 'application/json': {} },
+            },
+            400: { description: '路径越界或指向文件' },
+            404: { description: '会话不存在或目录不存在' },
+          },
+        },
+        post: {
+          summary: '上传文件到会话工作区',
+          description: '支持 multipart/form-data（多文件字段）或原始字节流（文件名取 ?filename= 或 X-Filename 头）。文件写入该会话的 cwd，同名自动追加 -1/-2 后缀，永不覆盖；返回的 path 可直接告知会话 AI 用文件工具读取。',
+          tags: ['Sessions'],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'filename', in: 'query', required: false, schema: { type: 'string' }, description: '原始字节流上传时的文件名' },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'multipart/form-data': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    files: { type: 'array', items: { type: 'string', format: 'binary' }, description: '一个或多个文件字段（字段名任意，带 filename 即保存）' },
+                  },
+                },
+              },
+              'application/octet-stream': {
+                schema: { type: 'string', format: 'binary', description: '原始字节流，配合 ?filename= 使用' },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: '保存结果（含落盘绝对路径）',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      ok: { type: 'boolean' },
+                      data: {
+                        type: 'object',
+                        properties: {
+                          sessionId: { type: 'string' },
+                          cwd: { type: 'string' },
+                          count: { type: 'integer' },
+                          totalBytes: { type: 'integer' },
+                          files: {
+                            type: 'array',
+                            items: {
+                              type: 'object',
+                              properties: {
+                                name: { type: 'string' },
+                                path: { type: 'string' },
+                                size: { type: 'integer' },
+                                mimeType: { type: 'string' },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: '请求体为空或 multipart 中无文件字段' },
+            404: { description: '会话不存在或无工作目录' },
+            413: { description: '超过 maxUploadBytes 上限' },
+          },
+        },
+      },
+      '/sessions/{id}/files/download': {
+        get: {
+          summary: '下载会话工作区文件',
+          description: '按相对路径下载 cwd 内的文件；?inline=1 时以 Content-Disposition: inline 返回（配合正确 MIME 可浏览器内预览）。禁止越出会话工作区。',
+          tags: ['Sessions'],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'path', in: 'query', required: true, schema: { type: 'string' }, description: '相对会话工作区的文件路径' },
+            { name: 'inline', in: 'query', required: false, schema: { type: 'string', enum: ['0', '1'] }, description: '1 = 内联预览（不触发下载）' },
+          ],
+          responses: {
+            200: { description: '文件字节流', content: { '*/*': { schema: { type: 'string', format: 'binary' } } } },
+            400: { description: '缺少 path / 路径越界 / 指向目录' },
+            404: { description: '会话或文件不存在' },
+          },
+        },
+      },
       '/models': {
         get: {
           summary: '查询可用模型列表',
@@ -300,6 +400,109 @@ function generateOpenApiSpec(prefix: string) {
             },
           },
           responses: { 200: { description: 'OpenAI 格式回复' } },
+        },
+      },
+      '/skills': {
+        get: {
+          summary: '查询技能列表（管理视图）',
+          description: '列出指定技能根目录下的全部技能（含 root/path/是否可模型/用户调用）。?root=user-dsh|user-agents|custom|project|bundled&cwd=&search=',
+          tags: ['Skills'],
+          parameters: [
+            { name: 'root', in: 'query', schema: { type: 'string', enum: ['user-dsh', 'user-agents', 'custom', 'project', 'bundled'] }, description: '技能根，默认 user-dsh' },
+            { name: 'cwd', in: 'query', schema: { type: 'string' }, description: 'root=project 时定位项目 .agents/.dsh/skills' },
+            { name: 'search', in: 'query', schema: { type: 'string' }, description: '按 name/description 模糊搜索' },
+          ],
+          responses: { 200: { description: '技能列表' } },
+        },
+        post: {
+          summary: '上传/创建技能',
+          description: 'multipart（file=技能压缩包 .zip/.tgz，字段 root、name）或 JSON（name/description/whenToUse/content）。压缩包兼容 <name>/SKILL.md 目录或单独包装目录。',
+          tags: ['Skills'],
+          parameters: [
+            { name: 'root', in: 'query', schema: { type: 'string' }, description: '技能根，默认 user-dsh' },
+            { name: 'cwd', in: 'query', schema: { type: 'string' } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'multipart/form-data': {
+                schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' }, root: { type: 'string' }, name: { type: 'string' } } },
+              },
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['name', 'description'],
+                  properties: {
+                    name: { type: 'string' },
+                    description: { type: 'string' },
+                    whenToUse: { type: 'string' },
+                    content: { type: 'string' },
+                    root: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          responses: { 200: { description: '技能落盘成功' }, 400: { description: '参数/解压失败' }, 413: { description: '超上传上限' } },
+        },
+      },
+      '/skills/{name}': {
+        get: {
+          summary: '查询单技能详情（含全文）',
+          tags: ['Skills'],
+          parameters: [
+            { name: 'name', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'root', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: { 200: { description: '技能详情（content=正文，raw=全文）' } },
+        },
+        put: {
+          summary: '更新技能元数据/正文',
+          tags: ['Skills'],
+          parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { description: { type: 'string' }, whenToUse: { type: 'string' }, content: { type: 'string' }, modelInvocable: { type: 'boolean' }, userInvocable: { type: 'boolean' } },
+                },
+              },
+            },
+          },
+          responses: { 200: { description: '更新成功' } },
+        },
+        delete: {
+          summary: '删除技能',
+          tags: ['Skills'],
+          parameters: [
+            { name: 'name', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'root', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: { 200: { description: '删除成功' } },
+        },
+      },
+      '/skills/{name}/body': {
+        get: {
+          summary: '下载/预览 SKILL.md 全文',
+          tags: ['Skills'],
+          parameters: [
+            { name: 'name', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'root', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: { 200: { description: 'text/markdown 全文' } },
+        },
+      },
+      '/skills/{name}/archive': {
+        get: {
+          summary: '下载整个技能目录归档 (.tgz)',
+          description: '含 SKILL.md 及 references/ 等资源，便于在不同 DSH 节点间迁移。',
+          tags: ['Skills'],
+          parameters: [
+            { name: 'name', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'root', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: { 200: { description: 'application/gzip 归档' } },
         },
       },
     },

@@ -18,6 +18,12 @@ export interface RouteEntry {
   pattern: RegExp
   paramNames: string[]
   handler: RouteHandler
+  /** true = 跳过 JSON 解析，把原始请求体 Buffer 交给 handler（文件上传用） */
+  rawBody?: boolean
+}
+
+export interface RouteOptions {
+  rawBody?: boolean
 }
 
 export class HttpRouter {
@@ -25,7 +31,7 @@ export class HttpRouter {
 
   constructor(private config: WebServiceConfig) {}
 
-  add(method: string, pathPattern: string, handler: RouteHandler): void {
+  add(method: string, pathPattern: string, handler: RouteHandler, options?: RouteOptions): void {
     const paramNames: string[] = []
     // 转换形如 /workspaces/:id/sessions 为正则表达式
     const regexStr = pathPattern
@@ -41,6 +47,7 @@ export class HttpRouter {
       pattern,
       paramNames,
       handler,
+      rawBody: options?.rawBody,
     })
   }
 
@@ -48,8 +55,8 @@ export class HttpRouter {
     this.add('GET', pathPattern, handler)
   }
 
-  post(pathPattern: string, handler: RouteHandler): void {
-    this.add('POST', pathPattern, handler)
+  post(pathPattern: string, handler: RouteHandler, options?: RouteOptions): void {
+    this.add('POST', pathPattern, handler, options)
   }
 
   put(pathPattern: string, handler: RouteHandler): void {
@@ -149,15 +156,29 @@ export class HttpRouter {
     // 读取并解析 Body（针对 POST/PUT/PATCH）
     let body: any = null
     if (['POST', 'PUT', 'PATCH'].includes(reqMethod)) {
-      try {
-        body = await readJsonBody(req)
-      } catch (err: any) {
-        sendJson(res, 400, {
-          ok: false,
-          error: `Invalid JSON body: ${err.message}`,
-          code: 'BAD_REQUEST',
-        })
-        return true
+      if (matchedRoute.rawBody) {
+        // 文件上传等原始体路由：整包读入 Buffer（上限取 maxUploadBytes 配置）
+        try {
+          body = await readRawBody(req, this.config.maxUploadBytes || 100 * 1024 * 1024)
+        } catch (err: any) {
+          sendJson(res, err?.message?.includes('too large') ? 413 : 400, {
+            ok: false,
+            error: err?.message || 'Failed to read request body',
+            code: err?.message?.includes('too large') ? 'PAYLOAD_TOO_LARGE' : 'BAD_REQUEST',
+          })
+          return true
+        }
+      } else {
+        try {
+          body = await readJsonBody(req)
+        } catch (err: any) {
+          sendJson(res, 400, {
+            ok: false,
+            error: `Invalid JSON body: ${err.message}`,
+            code: 'BAD_REQUEST',
+          })
+          return true
+        }
       }
     }
 
@@ -228,6 +249,32 @@ export function readJsonBody(req: IncomingMessage, maxBytes = 10 * 1024 * 1024):
       } catch (e: any) {
         reject(new Error(`Failed to parse JSON: ${e.message}`))
       }
+    })
+
+    req.on('error', (err) => {
+      reject(err)
+    })
+  })
+}
+
+/** 读取请求体为原始 Buffer（文件上传用） */
+export function readRawBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let totalLength = 0
+
+    req.on('data', (chunk: Buffer) => {
+      totalLength += chunk.length
+      if (totalLength > maxBytes) {
+        req.destroy()
+        reject(new Error(`Payload too large (> ${maxBytes} bytes)`))
+        return
+      }
+      chunks.push(chunk)
+    })
+
+    req.on('end', () => {
+      resolve(Buffer.concat(chunks))
     })
 
     req.on('error', (err) => {

@@ -8,6 +8,21 @@ import { randomUUID } from 'node:crypto'
 import { sendJson } from './router.js'
 import type { SessionCreateInput, SessionItem, SessionUpdateInput, SessionHistoryMessage } from './types.js'
 
+/**
+ * 防御式快照 live session 的事件日志：不同 DSH 核心版本里 `sessions.get()`
+ * 返回的记录结构不同（Session 实例的 events 是 getter；某些版本是包装记录，
+ * events 可能缺失或非数组）。任何形态异常都不能让 GET /sessions/:id 500，
+ * 否则调用方（如 WorkBuddy）会误判会话丢失而重建，导致多轮上下文清零。
+ */
+function snapshotLiveEvents(liveSession: any, fallback: any[]): any[] {
+  const ev = liveSession?.events
+  if (Array.isArray(ev)) return ev.slice()
+  if (ev && typeof ev[Symbol.iterator] === 'function') {
+    try { return [...ev] } catch { /* fallthrough */ }
+  }
+  return fallback
+}
+
 export function registerSessionRoutes(ctx: Context, router: any): void {
   // 1. 查询会话列表
   router.get('/sessions', async (_req: IncomingMessage, res: ServerResponse, _params: any, query: Record<string, string>) => {
@@ -92,8 +107,8 @@ export function registerSessionRoutes(ctx: Context, router: any): void {
       const sessionsService = ctx.get('sessions') as any
       const liveSession = sessionsService?.get ? sessionsService.get(sessionId) : undefined
       if (liveSession) {
-        meta = liveSession.header
-        events = [...liveSession.events]
+        meta = liveSession.header ?? meta
+        events = snapshotLiveEvents(liveSession, events)
       }
 
       if (!meta) {
@@ -334,7 +349,7 @@ export function registerSessionRoutes(ctx: Context, router: any): void {
       if (events.length === 0) {
         const sessionsService = ctx.get('sessions') as any
         const liveSession = sessionsService?.get ? sessionsService.get(sessionId) : undefined
-        if (liveSession) events = [...liveSession.events]
+        if (liveSession) events = snapshotLiveEvents(liveSession, events)
       }
 
       // 如果指定了 beforeSeq，过滤在 beforeSeq 之前

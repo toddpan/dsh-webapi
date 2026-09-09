@@ -70,22 +70,33 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
             break
 
           case 'tool/call':
+            // DSH 核心 tool/call 载荷: { turn, step, callId, name, arguments }
             sse.send('tool_call', {
-              id: event.data?.id,
+              id: event.data?.callId,
               name: event.data?.name,
               arguments: event.data?.arguments,
               seq: event.seq,
             })
             break
 
-          case 'tool/result':
+          case 'tool/result': {
+            // DSH 核心 tool/result 载荷: { turn, step, message: { content: [{type:'tool-result', toolCallId, content, isError}] } }
+            const msg = event.data?.message
+            const blocks: any[] = Array.isArray(msg?.content) ? msg.content : (msg?.content !== undefined ? [{ content: msg.content }] : [])
+            const flat = (c: any): string => {
+              if (typeof c === 'string') return c
+              if (Array.isArray(c)) return c.map((x) => (typeof x?.text === 'string' ? x.text : (typeof x === 'string' ? x : (() => { try { return JSON.stringify(x) } catch { return String(x) } })()))).join('\n')
+              try { return JSON.stringify(c ?? '') } catch { return String(c) }
+            }
+            const text = blocks.map((b) => flat(b?.content ?? b)).join('\n')
             sse.send('tool_result', {
-              id: event.data?.id,
-              name: event.data?.name,
-              result: event.data?.result,
+              id: blocks[0]?.toolCallId,
+              result: text,
+              isError: blocks.some((b) => b?.isError === true) || Boolean(event.data?.error),
               seq: event.seq,
             })
             break
+          }
 
           case 'turn/end':
             turnEnded = true

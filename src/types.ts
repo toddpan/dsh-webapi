@@ -154,4 +154,14 @@ export interface WebServiceConfig {
   cors?: boolean
   /** 默认工作空间目录，默认 process.cwd() */
   defaultCwd?: string
+  /** 文件上传大小上限（字节），默认 100MB */
+  maxUploadBytes?: number
+  /** 技能管理：额外自定义技能根目录（root=custom 时使用） */
+  customSkillDirs?: string[]
+  /** 技能管理：DSH 配置根（默认 $DSH_HOME 或 ~/.dsh） */
+  dshHome?: string
+  /** 技能管理：共享 agent 配置根（默认 $DSH_AGENTS_HOME 或 ~/.agents） */
+  agentsHome?: string
+  /** 技能管理：内置技能目录（默认 $DSH_BUNDLED_SKILL_DIR） */
+  bundledSkillDir?: string
 }

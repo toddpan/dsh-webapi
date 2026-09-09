@@ -37,6 +37,9 @@ DeepSeek Harness (DSH) Web Service API 插件：
 | | `DELETE` | `/sessions/:id` | 删除/归档会话 |
 | | `GET` | `/sessions/:id/history` | 分页查询会话历史消息 |
 | | `POST` | `/sessions/:id/cancel` | 中止会话轮次 |
+| | `POST` | `/sessions/:id/files` | 上传文件到会话工作区 (multipart 多文件 或 raw+?filename=)；同名自动 -1/-1 去重，AI 可用文件工具直接读取 |
+| | `GET` | `/sessions/:id/files` | 列出会话工作区目录（?path= 浏览相对子目录，目录优先排序） |
+| | `GET` | `/sessions/:id/files/download` | 下载工作区文件（?path= 相对路径；?inline=1 浏览器内联预览） |
 | **Streaming** | `POST` | `/sessions/:id/prompt-stream` | SSE 流式发送提示词并接收生成 |
 | | `GET` | `/sessions/:id/events` | SSE 会话全局事件监听订阅 |
 | | `POST` | `/sessions/:id/prompt` | 同步等待对话结果 |

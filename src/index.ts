@@ -15,6 +15,9 @@ import { registerWorkspaceRoutes } from './workspaces.js'
 import { registerSessionRoutes } from './sessions.js'
 import { registerModelRoutes } from './models.js'
 import { registerStreamingRoutes } from './streaming.js'
+import { registerFileRoutes } from './files.js'
+import { registerFsRoutes } from './fs.js'
+import { registerSkillRoutes } from './skills.js'
 import { registerOpenApiRoutes } from './openapi.js'
 import type { WebServiceConfig } from './types.js'
 
@@ -30,6 +33,7 @@ export const Config: z<Config> = z.object({
   standalonePort: z.natural().default(0).description('独立 HTTP 监听端口（0 表示仅使用主 webserver）'),
   cors: z.boolean().default(true).description('是否允许跨域请求'),
   defaultCwd: z.string().default('').description('默认工作目录（留空则为 process.cwd()）'),
+  maxUploadBytes: z.natural().default(100 * 1024 * 1024).description('文件上传大小上限（字节，默认 100MB）'),
 })
 
 export function apply(ctx: Context, config: Config): void {
@@ -64,6 +68,9 @@ export function apply(ctx: Context, config: Config): void {
   registerSessionRoutes(ctx, router)
   registerModelRoutes(ctx, router)
   registerStreamingRoutes(ctx, router)
+  registerFileRoutes(ctx, router, config)
+  registerFsRoutes(router, config)
+  registerSkillRoutes(ctx, router, config)
   registerOpenApiRoutes(router, config)
 
   // 3. 挂载到 DSH 主 Web 服务器 (ctx.webServer)
