@@ -18,6 +18,7 @@ import { registerStreamingRoutes } from './streaming.js'
 import { registerFileRoutes } from './files.js'
 import { registerFsRoutes } from './fs.js'
 import { registerSkillRoutes } from './skills.js'
+import { registerUserQuestionBridge } from './user-questions.js'
 import { registerOpenApiRoutes } from './openapi.js'
 import type { WebServiceConfig } from './types.js'
 
@@ -65,12 +66,13 @@ export function apply(ctx: Context, config: Config): void {
 
   // 2. 注册各子业务模块路由
   registerWorkspaceRoutes(ctx, router)
-  registerSessionRoutes(ctx, router)
+  registerSessionRoutes(ctx, router, config)
   registerModelRoutes(ctx, router)
   registerStreamingRoutes(ctx, router)
   registerFileRoutes(ctx, router, config)
   registerFsRoutes(router, config)
   registerSkillRoutes(ctx, router, config)
+  registerUserQuestionBridge(ctx, router)
   registerOpenApiRoutes(router, config)
 
   // 3. 挂载到 DSH 主 Web 服务器 (ctx.webServer)

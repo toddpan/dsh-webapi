@@ -6,6 +6,8 @@ import type { Context } from 'cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { sendJson } from './router.js'
+import { discoverSkills, resolveSkillRoot } from './skill-utils.js'
+import type { WebServiceConfig } from './types.js'
 import type { SessionCreateInput, SessionItem, SessionUpdateInput, SessionHistoryMessage } from './types.js'
 
 /**
@@ -23,7 +25,185 @@ function snapshotLiveEvents(liveSession: any, fallback: any[]): any[] {
   return fallback
 }
 
-export function registerSessionRoutes(ctx: Context, router: any): void {
+/** 读取会话完整持久事件日志（sessionController.inspect 优先，live session 兜底）。 */
+async function loadSessionEvents(ctx: Context, sessionId: string): Promise<any[]> {
+  const sessionController = ctx.get('sessionController') as any
+  let events: any[] = []
+  if (sessionController && typeof sessionController.inspect === 'function') {
+    try {
+      const inspected = await sessionController.inspect(sessionId, new AbortController().signal)
+      events = inspected?.events || []
+    } catch { /* fallthrough to live session */ }
+  }
+  if (events.length === 0) {
+    const sessionsService = ctx.get('sessions') as any
+    const liveSession = sessionsService?.get ? sessionsService.get(sessionId) : undefined
+    if (liveSession) events = snapshotLiveEvents(liveSession, events)
+  }
+  return events
+}
+
+function finiteNonNegative(v: any): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0
+}
+
+function eventTime(ev: any): number | null {
+  return finiteNonNegative(ev?.time) ? ev.time : null
+}
+
+/**
+ * 是否为携带非空首 token 的流块（对齐 harness session-stats 投影的 isTokenDelta）。
+ * assistant/chunk 载荷: { turn, step, chunk: { type: 'text-delta'|'reasoning-delta', text }
+ *   | { type: 'tool-call-delta', argumentsDelta?, name? } | ... }
+ */
+function isTokenDeltaChunk(chunk: any): boolean {
+  if (!chunk || typeof chunk !== 'object') return false
+  switch (chunk.type) {
+    case 'text-delta':
+    case 'reasoning-delta':
+      return typeof chunk.text === 'string' && chunk.text !== ''
+    case 'tool-call-delta':
+      return (typeof chunk.argumentsDelta === 'string' && chunk.argumentsDelta !== '')
+        || chunk.name !== undefined
+    default:
+      return false
+  }
+}
+
+export interface SessionStatsResult {
+  turns: number
+  steps: number
+  llmMs: number
+  toolMs: number
+  ttftMs: number
+  ttftSteps: number
+  decodeMs: number
+  decodeTokens: number
+  usage: {
+    /** 未命中缓存的计费输入 token（harness TokenUsage.inputTokens） */
+    inputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+    outputTokens: number
+  }
+}
+
+/**
+ * 持久事件日志 → 会话级实时统计，字段语义对齐 harness 的
+ * `@deepseek-ai/dsh-session-stats` 投影与 token-meter 账本：
+ *  - steps 计 `step/end`（步骤生命周期权威事件，完成/失败/取消都会落一条）；
+ *  - turns 为出现过分步闭合 turn 的去重数；
+ *  - llmMs = step/start → assistant/message 墙钟；
+ *  - 首 token = step/start 后首个非空 delta 块（assistant/chunk），跨 step 内 llm/retry 仍有效；
+ *  - decode 仅统计同时带 usage.outputTokens 的步（首 token → assistant/message）；
+ *  - toolMs 按 callId 配对 tool/call → tool/result；
+ *  - usage 为各步 assistant/message.usage（以及独立 usage 事件）的账本总和。
+ * 时间戳缺失的事件只跳过自身时间贡献，不影响其他统计。
+ */
+export function foldSessionStats(events: any[]): SessionStatsResult {
+  const out: SessionStatsResult = {
+    turns: 0, steps: 0, llmMs: 0, toolMs: 0,
+    ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0,
+    usage: { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 },
+  }
+  const turnsSeen = new Set<number>()
+  // 当前打开的 step 边界；message 组装后置 null，step/end 再兜底清理
+  let openStep: { startTime: number | null; firstTokenTime: number | null } | null = null
+  const pendingCalls = new Map<string, number>()
+  // 旧版核心可能以独立 usage 事件记账；只要日志里有带 usage 的 assistant/message，
+  // 就不重复计入独立 usage 事件，避免账本双算。
+  const hasMessageUsage = (events || []).some(
+    (ev: any) => ev?.type === 'assistant/message' && ev?.data?.usage && typeof ev.data.usage === 'object',
+  )
+
+  const closeStep = () => { openStep = null }
+
+  for (const ev of events || []) {
+    const t = eventTime(ev)
+    switch (ev?.type) {
+      case 'step/start': {
+        closeStep()
+        openStep = { startTime: t, firstTokenTime: null }
+        break
+      }
+      case 'assistant/chunk': {
+        if (openStep && openStep.firstTokenTime === null && t !== null
+          && isTokenDeltaChunk(ev.data?.chunk)) {
+          openStep.firstTokenTime = t
+        }
+        break
+      }
+      case 'assistant/message': {
+        if (openStep && openStep.startTime !== null && t !== null) {
+          out.llmMs += Math.max(0, t - openStep.startTime)
+        }
+        // 首 token 延迟只在消息组装（步正常走完模型调用）时计入，取消步不计
+        if (openStep && openStep.startTime !== null && openStep.firstTokenTime !== null && t !== null) {
+          out.ttftMs += Math.max(0, openStep.firstTokenTime - openStep.startTime)
+          out.ttftSteps += 1
+        }
+        if (openStep && openStep.firstTokenTime !== null && t !== null) {
+          const usage = ev.data?.usage
+          if (usage && typeof usage === 'object' && finiteNonNegative(usage.outputTokens)) {
+            out.decodeMs += Math.max(0, t - openStep.firstTokenTime)
+            out.decodeTokens += usage.outputTokens
+          }
+        }
+        // token 账本累加（billed input = 未缓存输入 + 缓存读 + 缓存写）
+        const usage = ev.data?.usage
+        if (usage && typeof usage === 'object') {
+          if (finiteNonNegative(usage.inputTokens)) out.usage.inputTokens += usage.inputTokens
+          if (finiteNonNegative(usage.cacheReadTokens)) out.usage.cacheReadTokens += usage.cacheReadTokens
+          if (finiteNonNegative(usage.cacheWriteTokens)) out.usage.cacheWriteTokens += usage.cacheWriteTokens
+          if (finiteNonNegative(usage.outputTokens)) out.usage.outputTokens += usage.outputTokens
+        }
+        closeStep()
+        break
+      }
+      case 'step/end': {
+        out.steps += 1
+        if (finiteNonNegative(ev.data?.turn)) turnsSeen.add(ev.data.turn)
+        closeStep()
+        break
+      }
+      case 'tool/call': {
+        const callId = ev.data?.callId
+        if (typeof callId === 'string' && callId && t !== null) pendingCalls.set(callId, t)
+        break
+      }
+      case 'tool/result': {
+        const callId = ev.data?.message?.content?.find?.((c: any) => c?.type === 'tool-result')?.toolCallId
+          ?? ev.data?.callId
+        const start = typeof callId === 'string' ? pendingCalls.get(callId) : undefined
+        if (start !== undefined && t !== null) {
+          out.toolMs += Math.max(0, t - start)
+          pendingCalls.delete(callId)
+        }
+        break
+      }
+      case 'usage': {
+        // 旧版核心的独立 usage 记账事件（新版在 assistant/message.usage 上）
+        if (!hasMessageUsage) {
+          const u = ev.data?.usage || ev.data
+          if (u && typeof u === 'object') {
+            if (finiteNonNegative(u.inputTokens)) out.usage.inputTokens += u.inputTokens
+            if (finiteNonNegative(u.cacheReadTokens)) out.usage.cacheReadTokens += u.cacheReadTokens
+            if (finiteNonNegative(u.cacheWriteTokens)) out.usage.cacheWriteTokens += u.cacheWriteTokens
+            if (finiteNonNegative(u.outputTokens)) out.usage.outputTokens += u.outputTokens
+          }
+        }
+        break
+      }
+      default:
+      break
+    }
+  }
+
+  out.turns = turnsSeen.size
+  return out
+}
+
+export function registerSessionRoutes(ctx: Context, router: any, config: WebServiceConfig): void {
   // 1. 查询会话列表
   router.get('/sessions', async (_req: IncomingMessage, res: ServerResponse, _params: any, query: Record<string, string>) => {
     try {
@@ -415,6 +595,79 @@ export function registerSessionRoutes(ctx: Context, router: any): void {
       })
     } catch (err: any) {
       sendJson(res, 500, { ok: false, error: err.message })
+    }
+  })
+
+  // 6.5 会话实时统计（轮/步/LLM 与工具耗时/首 token/吞吐/缓存命中/token 账本）
+  router.get('/sessions/:id/stats', async (_req: IncomingMessage, res: ServerResponse, params: Record<string, string>) => {
+    try {
+      const sessionId = params.id
+      const events = await loadSessionEvents(ctx, sessionId)
+      const stats = foldSessionStats(events)
+      sendJson(res, 200, {
+        ok: true,
+        data: {
+          sessionId,
+          ...stats,
+          // 计费输入 = 未缓存输入 + 缓存读 + 缓存写（对齐 harness billedInputTokens）
+          billedInputTokens: stats.usage.inputTokens + stats.usage.cacheReadTokens + stats.usage.cacheWriteTokens,
+        },
+      })
+    } catch (err: any) {
+      sendJson(res, 500, { ok: false, error: err.message })
+    }
+  })
+
+  // 6.5 会话作用域技能目录（对齐 harness skills/list：按会话 cwd 解析技能根，供输入框 "/" 候选）
+  // 装载语义在宿主核心：用户消息中的空白符边界 /name 手势（tool-skill pre-step）会把
+  // 技能正文注入模型上下文，本接口只负责给出可选清单与元数据。
+  router.get('/sessions/:id/skills', async (_req: IncomingMessage, res: ServerResponse, params: Record<string, string>, query: Record<string, string>) => {
+    try {
+      const sessionId = params.id
+
+      // 会话 cwd：inspect meta 优先，live session header 兜底
+      let cwd: string | undefined
+      const sessionController = ctx.get('sessionController') as any
+      if (sessionController && typeof sessionController.inspect === 'function') {
+        try {
+          const inspected = await sessionController.inspect(sessionId, new AbortController().signal)
+          cwd = inspected?.meta?.cwd
+        } catch { /* fallthrough */ }
+      }
+      if (!cwd) {
+        const sessionsService = ctx.get('sessions') as any
+        const liveSession = sessionsService?.get ? sessionsService.get(sessionId) : undefined
+        cwd = liveSession?.header?.cwd || liveSession?.cwd
+      }
+
+      const resolved = resolveSkillRoot(query.root || 'user-dsh', cwd, config.customSkillDirs || [], config.dshHome, config.agentsHome, config.bundledSkillDir)
+      if ('error' in resolved) return sendJson(res, 400, { ok: false, error: resolved.error, code: 'BAD_REQUEST' })
+      const root = resolved.root
+
+      const skills = await discoverSkills(root.path)
+      const kw = (query.search || '').trim().toLowerCase()
+      const filtered = kw
+        ? skills.filter((x) => x.name.toLowerCase().includes(kw) || x.description.toLowerCase().includes(kw))
+        : skills
+      // userInvocable 缺省 true（skill-utils 已按 frontmatter 解析）；gesture 注入只认可用户调用的技能
+      sendJson(res, 200, {
+        ok: true,
+        data: {
+          sessionId,
+          cwd: cwd || undefined,
+          root: { kind: root.kind, path: root.path },
+          count: filtered.length,
+          skills: filtered.map((x) => ({
+            name: x.name,
+            description: x.description,
+            whenToUse: x.whenToUse,
+            modelInvocable: x.modelInvocable,
+            userInvocable: x.userInvocable,
+          })),
+        },
+      })
+    } catch (err: any) {
+      sendJson(res, 500, { ok: false, error: err?.message || String(err) })
     }
   })
 

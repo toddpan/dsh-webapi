@@ -36,6 +36,10 @@ DeepSeek Harness (DSH) Web Service API 插件：
 | | `PUT` | `/sessions/:id` | 修改会话 (标题/模型) |
 | | `DELETE` | `/sessions/:id` | 删除/归档会话 |
 | | `GET` | `/sessions/:id/history` | 分页查询会话历史消息 |
+| | `GET` | `/sessions/:id/stats` | 会话实时统计：轮/步、LLM 与工具调用耗时、首 token 均值、解码吞吐、缓存命中、token 账本（对齐 harness session-stats 投影语义） |
+| | `GET` | `/sessions/:id/skills` | 会话作用域技能目录（按会话 cwd 解析技能根，支持 `?search=` 过滤；供输入框 "/" 技能候选，对齐 harness skills/list） |
+| | `GET` | `/sessions/:id/questions` | 查询会话当前挂起的 ask_user_question 问题批次（REST 集成的宿主侧答复桥，≥0.1.7；含 connection 层抢答绕过与 ALS 会话归属） |
+| | `POST` | `/sessions/:id/answers` | 提交挂起问题的答复（`answers: [{id, selected, custom?}]`），resolve 后工具以普通 tool/result 返回、会话继续 |
 | | `POST` | `/sessions/:id/cancel` | 中止会话轮次 |
 | | `POST` | `/sessions/:id/files` | 上传文件到会话工作区 (multipart 多文件 或 raw+?filename=)；同名自动 -1/-1 去重，AI 可用文件工具直接读取 |
 | | `GET` | `/sessions/:id/files` | 列出会话工作区目录（?path= 浏览相对子目录，目录优先排序） |

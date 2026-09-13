@@ -6,6 +6,7 @@ import type { Context } from 'cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { initSseStream, sendJson } from './router.js'
+import { askSessionStorage } from './user-questions.js'
 import type { OpenAiChatCompletionRequest, SessionPromptInput } from './types.js'
 
 export function registerStreamingRoutes(ctx: Context, router: any): void {
@@ -18,7 +19,7 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
     }
 
     try {
-      const result = await executePromptAndWait(ctx, sessionId, body)
+      const result = await askSessionStorage.run({ sessionId }, () => executePromptAndWait(ctx, sessionId, body))
       sendJson(res, 200, { ok: true, data: result })
     } catch (err: any) {
       sendJson(res, 500, { ok: false, error: err.message })
@@ -98,6 +99,16 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
             break
           }
 
+          case 'assistant/message':
+          case 'usage': {
+            // 透传真实 token 账本（含缓存命中），供前端展示缓存率
+            const u = event.type === 'usage' ? (event.data?.usage || event.data) : event.data?.usage
+            if (u && typeof u === 'object') {
+              sse.send('usage', { usage: u, seq: event.seq })
+            }
+            break
+          }
+
           case 'turn/end':
             turnEnded = true
             sse.send('turn_end', {
@@ -133,9 +144,9 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
       cleanup()
     })
 
-    // 提交 Prompt 给会话
+    // 提交 Prompt 给会话（ALS 携带 sessionId，供 ask_user_question 答复桥归属）
     try {
-      await submitPromptToSession(ctx, sessionId, body)
+      await askSessionStorage.run({ sessionId }, () => submitPromptToSession(ctx, sessionId, body))
     } catch (err: any) {
       sse.send('error', { message: `Failed to admit prompt: ${err.message}` })
       cleanup()
@@ -299,12 +310,18 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
       }
 
       // 非流式：执行并等待结果
-      const result = await executePromptAndWait(ctx, sessionId, { prompt: promptText })
+      const result = await askSessionStorage.run({ sessionId }, () => executePromptAndWait(ctx, sessionId, { prompt: promptText }))
+      // 透传模型真实选择（会话 request/header 的 provider/model），而不是占位字符串。
+      const realModel = (await readSessionModel(ctx, sessionId)) || body.model || 'dsh-model'
+      // 映射 harness 的 token 账本到 OpenAI 兼容 usage 字段；prompt_tokens 含缓存命中(PromptCache读)。
+      const usage = result.usage
+        ? toOpenAiUsage(result.usage)
+        : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
       const openAiResponse = {
         id: completionId,
         object: 'chat.completion',
         created: createdTime,
-        model: body.model || 'dsh-model',
+        model: realModel,
         sessionId,
         choices: [
           {
@@ -317,11 +334,7 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
             finish_reason: 'stop',
           },
         ],
-        usage: {
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          total_tokens: 0,
-        },
+        usage,
       }
 
       const payload = JSON.stringify(openAiResponse)
@@ -385,17 +398,18 @@ async function executePromptAndWait(
   ctx: Context,
   sessionId: string,
   input: SessionPromptInput,
-): Promise<{ content: string; reasoning?: string; toolCalls: any[] }> {
+): Promise<{ content: string; reasoning?: string; toolCalls: any[]; usage?: Record<string, number> }> {
   return new Promise(async (resolve, reject) => {
     let content = ''
     let reasoning = ''
     const toolCalls: any[] = []
+    let usage: Record<string, number> | undefined
     let completed = false
 
     const timeout = setTimeout(() => {
       cleanup()
       if (!completed) {
-        resolve({ content, reasoning, toolCalls })
+        resolve({ content, reasoning, toolCalls, usage })
       }
     }, input.timeoutMs || 180000)
 
@@ -420,6 +434,12 @@ async function executePromptAndWait(
           const texts = msg.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
           if (texts) content = texts
         }
+        // 记录本轮真实 token 账本（含缓存命中），供 OpenAI 兼容响应透传
+        const u = event.data?.usage
+        if (u && typeof u === 'object') usage = { ...u }
+      } else if (event.type === 'usage') {
+        const u = event.data?.usage || event.data
+        if (u && typeof u === 'object') usage = { ...u }
       } else if (event.type === 'tool/call') {
         toolCalls.push(event.data)
       } else if (event.type === 'turn/end') {
@@ -429,6 +449,7 @@ async function executePromptAndWait(
           content: content.trim(),
           reasoning: reasoning || undefined,
           toolCalls,
+          usage,
         })
       } else if (event.type === 'error') {
         completed = true
@@ -449,4 +470,49 @@ async function executePromptAndWait(
       reject(err)
     }
   })
+}
+
+/**
+ * 解析会话当前实际使用的模型（provider/model），供 OpenAI 兼容响应透传。
+ * 优先取 agent 的模型选择，否则取会话 request/header 的 config，二者都无则 undefined。
+ */
+async function readSessionModel(ctx: Context, sessionId: string): Promise<string | undefined> {
+  try {
+    const sessionController = ctx.get('sessionController') as any
+    const agentsService = ctx.get('agents') as any
+    const agent = agentsService?.get ? agentsService.get(sessionId) : undefined
+    const selection = sessionController?.agents?.selectionFor?.(agent)?.current
+    if (selection?.provider && selection?.model) return `${selection.provider}/${selection.model}`
+    const sessionsService = ctx.get('sessions') as any
+    const live = sessionsService?.get ? sessionsService.get(sessionId) : undefined
+    const hdr = live?.requestHeader?.()
+    if (hdr?.config?.provider && hdr?.config?.model) return `${hdr.config.provider}/${hdr.config.model}`
+  } catch { /* fallthrough */ }
+  return undefined
+}
+
+/**
+ * 把 harness token 账本映射为 OpenAI 兼容 usage 字段。
+ * Harness 约定 inputTokens/cacheReadTokens 已按「命中/未命中」拆分（互斥），
+ * 而 OpenAI 兼容表单的 prompt_tokens 包含缓存命中，故 prompt_tokens = miss + hit。
+ */
+function toOpenAiUsage(usage: Record<string, number>): {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  prompt_cache_hit_tokens: number
+  prompt_cache_miss_tokens: number
+} {
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  const read = num(usage.cacheReadTokens)
+  const miss = num(usage.uncachedInputTokens) || num(usage.inputTokens)
+  const output = num(usage.outputTokens)
+  const prompt = miss + read
+  return {
+    prompt_tokens: prompt,
+    completion_tokens: output,
+    total_tokens: num(usage.totalTokens) || (prompt + output),
+    prompt_cache_hit_tokens: read,
+    prompt_cache_miss_tokens: miss,
+  }
 }

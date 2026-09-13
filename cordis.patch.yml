@@ -1,0 +1,6 @@
+# dsh-web-service bundle layer: insert the web-service plugin row.
+# Mounts onto the bundled webserver's prefix route (default /api/v1).
+- insert:
+    - id: dsh-web-service
+      name: '@dsh-external/dsh-web-service'
+      config: {}

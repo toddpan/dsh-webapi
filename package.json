@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/dsh-web-service",
-  "version": "0.1.4",
+  "version": "0.1.7",
   "description": "DSH Web Service API 插件，对外提供 RESTful & SSE 接口",
   "private": true,
   "type": "module",
