@@ -39,6 +39,10 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
 
     let cleanedUp = false
     let turnEnded = false
+    // 本 step 已推送的文本/思考量：harness 可能不发增量 chunk，只在 assistant/message 给全文，
+    // 用它做差量补推，既不丢内容也不重复。
+    let streamedText = ''
+    let streamedReasoning = ''
 
     // 监听 session/event
     const unsubscribe = ctx.on('session/event', (session: any, event: any) => {
@@ -48,14 +52,24 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
         if (event.type === 'assistant/chunk') {
           const chunk = event.data?.chunk
           if (chunk?.type === 'text-delta') {
-            sse.send('delta', { delta: chunk.text || '', seq: event.seq })
+            const t = chunk.text || ''
+            streamedText += t
+            if (t) sse.send('delta', { delta: t, seq: event.seq })
           } else if (chunk?.type === 'reasoning-delta') {
-            sse.send('reasoning', { delta: chunk.text || '', seq: event.seq })
+            const t = chunk.text || ''
+            streamedReasoning += t
+            if (t) sse.send('reasoning', { delta: t, seq: event.seq })
           }
           return
         }
 
         switch (event.type) {
+          case 'step/start':
+            // 每个 step 是一次独立模型调用：重置差量游标
+            streamedText = ''
+            streamedReasoning = ''
+            break
+
           case 'reasoning/delta':
             sse.send('reasoning', {
               delta: event.data?.delta || '',
@@ -63,12 +77,12 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
             })
             break
 
-          case 'assistant/delta':
-            sse.send('delta', {
-              delta: event.data?.delta || '',
-              seq: event.seq,
-            })
+          case 'assistant/delta': {
+            const t = event.data?.delta || ''
+            streamedText += t
+            if (t) sse.send('delta', { delta: t, seq: event.seq })
             break
+          }
 
           case 'tool/call':
             // DSH 核心 tool/call 载荷: { turn, step, callId, name, arguments }
@@ -101,6 +115,20 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
 
           case 'assistant/message':
           case 'usage': {
+            // harness 可能不发增量 chunk：从完整 assistant 消息补推差量文本
+            if (event.type === 'assistant/message') {
+              const full = extractAssistantText(event.data?.message)
+              const textSuffix = takeSuffix(full.text, streamedText)
+              if (textSuffix) {
+                sse.send('delta', { delta: textSuffix, seq: event.seq })
+                streamedText = full.text
+              }
+              const reasonSuffix = takeSuffix(full.reasoning, streamedReasoning)
+              if (reasonSuffix) {
+                sse.send('reasoning', { delta: reasonSuffix, seq: event.seq })
+                streamedReasoning = full.reasoning
+              }
+            }
             // 透传真实 token 账本（含缓存命中），供前端展示缓存率
             const u = event.type === 'usage' ? (event.data?.usage || event.data) : event.data?.usage
             if (u && typeof u === 'object') {
@@ -248,15 +276,30 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
         res.flushHeaders?.()
 
         let cleanedUp = false
+        // 本 step 已推送文本量：harness 只在 assistant/message 给全文时补推差量
+        let streamedText = ''
         const unsubscribe = ctx.on('session/event', (session: any, event: any) => {
           if (String(session.id) !== sessionId) return
 
           let deltaText = ''
-          if (event.type === 'assistant/chunk') {
+          if (event.type === 'step/start') {
+            streamedText = ''
+          } else if (event.type === 'assistant/chunk') {
             const chunk = event.data?.chunk
-            if (chunk?.type === 'text-delta') deltaText = chunk.text || ''
+            if (chunk?.type === 'text-delta') {
+              deltaText = chunk.text || ''
+              streamedText += deltaText
+            }
           } else if (event.type === 'assistant/delta') {
             deltaText = event.data?.delta || ''
+            streamedText += deltaText
+          } else if (event.type === 'assistant/message') {
+            const full = extractAssistantText(event.data?.message)
+            const suffix = takeSuffix(full.text, streamedText)
+            if (suffix) {
+              deltaText = suffix
+              streamedText = full.text
+            }
           }
 
           if (deltaText) {
@@ -380,6 +423,7 @@ async function submitPromptToSession(ctx: Context, sessionId: string, input: Ses
 
   const message = {
     id: `msg-${randomUUID()}`,
+    role: 'user',
     source: { kind: 'user' },
     content: contentBlocks,
   }
@@ -515,4 +559,28 @@ function toOpenAiUsage(usage: Record<string, number>): {
     prompt_cache_hit_tokens: read,
     prompt_cache_miss_tokens: miss,
   }
+}
+
+/** 从 assistant 消息内容块提取正文与思考文本（兼容 text / reasoning / thinking 块）。 */
+function extractAssistantText(message: any): { text: string; reasoning: string } {
+  let text = ''
+  let reasoning = ''
+  const parts = Array.isArray(message?.content) ? message.content : []
+  for (const p of parts) {
+    if (!p || typeof p !== 'object') continue
+    if (p.type === 'text' && typeof p.text === 'string') text += p.text
+    else if ((p.type === 'reasoning' || p.type === 'thinking') && typeof p.text === 'string') reasoning += p.text
+  }
+  return { text, reasoning }
+}
+/** 取 full 相对 streamed 的增量：已对齐只补差量；无法对齐且尚未推送过则补全量。 */
+function takeSuffix(full: unknown, streamed: unknown): string {
+  const f = typeof full === 'string' ? full : ''
+  const s = typeof streamed === 'string' ? streamed : ''
+  if (!f) return ''
+  if (!s) return f
+  if (f === s) return ''
+  if (f.startsWith(s)) return f.slice(s.length)
+  if (s.startsWith(f)) return ''
+  return f
 }
