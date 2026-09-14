@@ -39,7 +39,7 @@ import type { WebServiceConfig } from './types.js'
 const execFileAsync = promisify(execFile)
 
 export function registerSkillRoutes(ctx: Context, router: HttpRouter, config: WebServiceConfig): void {
-  const maxBytes = config.maxUploadBytes || 100 * 1024 * 1024
+  const maxBytes = config.maxUploadBytes || 2 * 1024 * 1024 * 1024
   const customDirs = config.customSkillDirs || []
 
   const rootOf = (kind: string | undefined, cwd: string | undefined): SkillRoot | { error: string } => {

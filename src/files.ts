@@ -280,7 +280,7 @@ export function registerFileRoutes(ctx: Context, router: HttpRouter, config: Web
       const sessionId = params.id
       const contentType = String(_req.headers['content-type'] || '')
       const buffer: Buffer = Buffer.isBuffer(body) ? body : Buffer.alloc(0)
-      const maxBytes = config.maxUploadBytes || 100 * 1024 * 1024
+      const maxBytes = config.maxUploadBytes || 2 * 1024 * 1024 * 1024
 
       if (buffer.length === 0) {
         sendJson(res, 400, { ok: false, error: '请求体为空：请以 multipart/form-data 或原始字节流上传文件', code: 'BAD_REQUEST' })

@@ -34,7 +34,7 @@ export const Config: z<Config> = z.object({
   standalonePort: z.natural().default(0).description('独立 HTTP 监听端口（0 表示仅使用主 webserver）'),
   cors: z.boolean().default(true).description('是否允许跨域请求'),
   defaultCwd: z.string().default('').description('默认工作目录（留空则为 process.cwd()）'),
-  maxUploadBytes: z.natural().default(100 * 1024 * 1024).description('文件上传大小上限（字节，默认 100MB）'),
+  maxUploadBytes: z.natural().default(2 * 1024 * 1024 * 1024).description('文件上传大小上限（字节，默认 2GB；大文件建议走 /files/resumable 分片接口）'),
 })
 
 export function apply(ctx: Context, config: Config): void {

@@ -159,7 +159,7 @@ export class HttpRouter {
       if (matchedRoute.rawBody) {
         // 文件上传等原始体路由：整包读入 Buffer（上限取 maxUploadBytes 配置）
         try {
-          body = await readRawBody(req, this.config.maxUploadBytes || 100 * 1024 * 1024)
+          body = await readRawBody(req, this.config.maxUploadBytes || 2 * 1024 * 1024 * 1024)
         } catch (err: any) {
           sendJson(res, err?.message?.includes('too large') ? 413 : 400, {
             ok: false,
