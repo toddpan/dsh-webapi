@@ -44,11 +44,40 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
     let streamedText = ''
     let streamedReasoning = ''
 
+    /**
+     * 本次流所属的 turn。
+     *
+     * 事件订阅是**会话级**的：若订阅时该会话上一轮尚未收尾（prompt 被排队 / steer 到运行中回合），
+     * 旧轮次的 `turn/end` 会被误当作本轮结束 —— 流提前关闭，调用方拿到半截内容却以为完成了。
+     * 因此：
+     *   - `turn/start` 之前到达的 `turn/end` 一定不属于本次提交（它的 turn/start 早于订阅），直接忽略；
+     *   - 一旦认领了自己的 turn，后续其它 turn 的事件（含 turn/end）一律不转发；
+     *   - steer 模式下不会出现新的 `turn/start`，此时 ownTurn 保持 undefined，行为与旧版一致。
+     */
+    let ownTurn: number | undefined
+    let sawTurnStart = false
+    const turnOf = (event: any): number | undefined =>
+      typeof event?.data?.turn === 'number' ? event.data.turn : undefined
+    const isForeignTurn = (event: any): boolean => {
+      if (!sawTurnStart || ownTurn === undefined) return false
+      const t = turnOf(event)
+      return t !== undefined && t !== ownTurn
+    }
+
     // 监听 session/event
     const unsubscribe = ctx.on('session/event', (session: any, event: any) => {
       if (String(session.id) !== sessionId) return
+      if (isForeignTurn(event)) return
 
       try {
+        if (event.type === 'turn/start') {
+          if (!sawTurnStart) {
+            sawTurnStart = true
+            const t = turnOf(event)
+            if (t !== undefined) ownTurn = t
+          }
+          return
+        }
         if (event.type === 'assistant/chunk') {
           const chunk = event.data?.chunk
           if (chunk?.type === 'text-delta') {
@@ -138,6 +167,8 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
           }
 
           case 'turn/end':
+            // 尚未见到本轮 turn/start 就来的 turn/end：属于订阅前就已开始的旧轮次，不是本次提交的结束
+            if (!sawTurnStart) break
             turnEnded = true
             sse.send('turn_end', {
               reason: event.data?.reason || 'completed',
@@ -278,8 +309,25 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
         let cleanedUp = false
         // 本 step 已推送文本量：harness 只在 assistant/message 给全文时补推差量
         let streamedText = ''
+        // 与本文件 prompt-stream 相同的 turn 归属判定：忽略订阅前旧轮次的 turn/end 与其它轮次的事件
+        let ownTurn: number | undefined
+        let sawTurnStart = false
         const unsubscribe = ctx.on('session/event', (session: any, event: any) => {
           if (String(session.id) !== sessionId) return
+          const turnOf = (e: any): number | undefined => (typeof e?.data?.turn === 'number' ? e.data.turn : undefined)
+          if (event.type === 'turn/start') {
+            if (!sawTurnStart) {
+              sawTurnStart = true
+              const t = turnOf(event)
+              if (t !== undefined) ownTurn = t
+            }
+            return
+          }
+          if (!sawTurnStart && event.type === 'turn/end') return
+          if (sawTurnStart && ownTurn !== undefined) {
+            const t = turnOf(event)
+            if (t !== undefined && t !== ownTurn) return
+          }
 
           let deltaText = ''
           if (event.type === 'step/start') {
