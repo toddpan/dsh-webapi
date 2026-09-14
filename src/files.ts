@@ -9,8 +9,9 @@
  */
 
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, rename, rm, stat, writeFile, appendFile, readFile } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from 'cordis'
@@ -338,4 +339,178 @@ export function registerFileRoutes(ctx: Context, router: HttpRouter, config: Web
     },
     { rawBody: true },
   )
+
+  // ---- 分片断点续传上传 ----
+  // 暂存目录 <cwd>/.dsh-uploads/：分片顺序追加到 <uploadId>.part；meta 记录 name/size/mimeType。
+  // received 以 .part 实际字节数为权威（服务重启/重复请求皆可恢复）。offset 不匹配返回 409 + 实际 received。
+  // complete 时原子改名落入工作区（同名 -1/-2 去重），返回与 POST /files 完全一致的 files 形状。
+
+  const stageDirOf = (cwd: string) => path.join(cwd, '.dsh-uploads')
+
+  function stagePathsOf(cwd: string, uploadId: string): { part: string; meta: string } | undefined {
+    const id = String(uploadId || '').replace(/[^A-Za-z0-9._-]/g, '')
+    if (!id || id.length > 120) return undefined
+    return { part: path.join(stageDirOf(cwd), id + '.part'), meta: path.join(stageDirOf(cwd), id + '.json') }
+  }
+
+  interface StageMeta {
+    name: string
+    size: number
+    mimeType?: string
+    createdAt: number
+  }
+
+  async function readStageMeta(metaFile: string): Promise<StageMeta | undefined> {
+    try {
+      const obj = JSON.parse(await readFile(metaFile, 'utf-8'))
+      if (obj && typeof obj.name === 'string') return obj as StageMeta
+    } catch {
+      // 不存在或损坏 → 视为无 meta
+    }
+    return undefined
+  }
+
+  async function stageReceived(partFile: string): Promise<number> {
+    try {
+      return (await stat(partFile)).size
+    } catch {
+      return 0
+    }
+  }
+
+  // init：POST /sessions/:id/files/resumable?name=&size=&mimeType=
+  router.post(
+    '/sessions/:id/files/resumable',
+    async (_req: IncomingMessage, res: ServerResponse, params: Record<string, string>, query: Record<string, string>) => {
+      const cwd = await resolveSessionCwd(ctx, params.id)
+      if (!cwd) {
+        sendJson(res, 404, { ok: false, error: `Session '${params.id}' not found or has no workspace cwd`, code: 'NOT_FOUND' })
+        return
+      }
+      const name = sanitizeFilename(query.name)
+      const size = Math.max(0, Math.floor(Number(query.size) || 0))
+      const mimeType = String(query.mimeType || '').slice(0, 120) || undefined
+      const uploadId = `up-${randomUUID().replace(/-/g, '').slice(0, 20)}`
+      try {
+        await mkdir(stageDirOf(cwd), { recursive: true })
+        const paths = stagePathsOf(cwd, uploadId)!
+        await writeFile(paths.part, Buffer.alloc(0))
+        const meta: StageMeta = { name, size, mimeType, createdAt: Date.now() }
+        await writeFile(paths.meta, JSON.stringify(meta))
+        sendJson(res, 200, { ok: true, data: { uploadId, name, size, received: 0 } })
+      } catch (err: any) {
+        sendJson(res, 500, { ok: false, error: `初始化分片上传失败: ${err?.message || err}` })
+      }
+    },
+    { rawBody: true },
+  )
+
+  // 状态查询（断点续传恢复点）：GET /sessions/:id/files/resumable/:uploadId
+  router.get('/sessions/:id/files/resumable/:uploadId', async (_req: IncomingMessage, res: ServerResponse, params: Record<string, string>) => {
+    const cwd = await resolveSessionCwd(ctx, params.id)
+    const paths = cwd ? stagePathsOf(cwd, params.uploadId) : undefined
+    if (!cwd || !paths) {
+      sendJson(res, 400, { ok: false, error: '非法 uploadId', code: 'BAD_REQUEST' })
+      return
+    }
+    const meta = await readStageMeta(paths.meta)
+    if (!meta) {
+      sendJson(res, 404, { ok: false, error: '上传会话不存在或已完成/清理', code: 'NOT_FOUND' })
+      return
+    }
+    sendJson(res, 200, { ok: true, data: { uploadId: params.uploadId, name: meta.name, size: meta.size, received: await stageReceived(paths.part) } })
+  })
+
+  // 追加分片：PUT /sessions/:id/files/resumable/:uploadId?offset=<字节>（原始字节流）
+  router.add(
+    'PUT',
+    '/sessions/:id/files/resumable/:uploadId',
+    async (_req: IncomingMessage, res: ServerResponse, params: Record<string, string>, query: Record<string, string>, body: any) => {
+      const cwd = await resolveSessionCwd(ctx, params.id)
+      const paths = cwd ? stagePathsOf(cwd, params.uploadId) : undefined
+      if (!cwd || !paths) {
+        sendJson(res, 400, { ok: false, error: '非法 uploadId', code: 'BAD_REQUEST' })
+        return
+      }
+      const meta = await readStageMeta(paths.meta)
+      if (!meta) {
+        sendJson(res, 404, { ok: false, error: '上传会话不存在或已完成/清理', code: 'NOT_FOUND' })
+        return
+      }
+      const chunk: Buffer = Buffer.isBuffer(body) ? body : Buffer.alloc(0)
+      if (chunk.length === 0) {
+        sendJson(res, 400, { ok: false, error: '分片内容为空', code: 'BAD_REQUEST' })
+        return
+      }
+      const received = await stageReceived(paths.part)
+      const offset = Number(query.offset)
+      if (!Number.isFinite(offset) || offset < 0 || offset !== received) {
+        // 断点不一致：告知服务端实际接收量，客户端从该处续传
+        sendJson(res, 409, { ok: false, error: `offset 不匹配：服务端已接收 ${received} 字节`, code: 'OFFSET_MISMATCH', data: { received } })
+        return
+      }
+      try {
+        await appendFile(paths.part, chunk)
+        sendJson(res, 200, { ok: true, data: { uploadId: params.uploadId, received: received + chunk.length } })
+      } catch (err: any) {
+        sendJson(res, 500, { ok: false, error: `写入分片失败: ${err?.message || err}` })
+      }
+    },
+    { rawBody: true },
+  )
+
+  // 完成：POST /sessions/:id/files/resumable/:uploadId/complete
+  router.post('/sessions/:id/files/resumable/:uploadId/complete', async (_req: IncomingMessage, res: ServerResponse, params: Record<string, string>) => {
+    const cwd = await resolveSessionCwd(ctx, params.id)
+    const paths = cwd ? stagePathsOf(cwd, params.uploadId) : undefined
+    if (!cwd || !paths) {
+      sendJson(res, 400, { ok: false, error: '非法 uploadId', code: 'BAD_REQUEST' })
+      return
+    }
+    const meta = await readStageMeta(paths.meta)
+    if (!meta) {
+      sendJson(res, 404, { ok: false, error: '上传会话不存在或已完成/清理', code: 'NOT_FOUND' })
+      return
+    }
+    const received = await stageReceived(paths.part)
+    if (meta.size > 0 && received !== meta.size) {
+      sendJson(res, 409, {
+        ok: false,
+        error: `文件未传完：已接收 ${received}/${meta.size} 字节`,
+        code: 'INCOMPLETE',
+        data: { received, size: meta.size },
+      })
+      return
+    }
+    try {
+      const target = uniqueTarget(cwd, meta.name)
+      await rename(paths.part, target)
+      await rm(paths.meta, { force: true })
+      sendJson(res, 200, {
+        ok: true,
+        data: {
+          sessionId: params.id,
+          cwd,
+          count: 1,
+          files: [{ name: path.basename(target), path: target, size: received, mimeType: meta.mimeType }],
+          hint: '文件已写入会话工作区，会话中的 AI 可通过文件工具直接读取（把返回的 path 告诉它即可）',
+        },
+      })
+    } catch (err: any) {
+      sendJson(res, 500, { ok: false, error: `落盘失败: ${err?.message || err}` })
+    }
+  })
+
+  // 中止/清理：DELETE /sessions/:id/files/resumable/:uploadId
+  router.delete('/sessions/:id/files/resumable/:uploadId', async (_req: IncomingMessage, res: ServerResponse, params: Record<string, string>) => {
+    const cwd = await resolveSessionCwd(ctx, params.id)
+    const paths = cwd ? stagePathsOf(cwd, params.uploadId) : undefined
+    if (!cwd || !paths) {
+      sendJson(res, 400, { ok: false, error: '非法 uploadId', code: 'BAD_REQUEST' })
+      return
+    }
+    await rm(paths.part, { force: true })
+    await rm(paths.meta, { force: true })
+    sendJson(res, 200, { ok: true, data: { uploadId: params.uploadId, aborted: true } })
+  })
 }
