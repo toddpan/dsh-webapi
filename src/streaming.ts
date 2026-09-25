@@ -179,9 +179,14 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
             break
 
           case 'error':
+            // error 是流终结事件：必须补 done 并关闭，否则消费方（等 done/关流才结束）
+            // 会永远挂在打开的 SSE 上 —— 表现为「回复一直不同步」。错误后的恢复交给
+            // 调用方的对账通道（history/status 轮询），本流不再服务后续事件。
             sse.send('error', {
               message: event.data?.message || 'Execution error',
             })
+            sse.send('done', '[DONE]')
+            cleanup()
             break
         }
       } catch {

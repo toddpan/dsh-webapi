@@ -203,6 +203,104 @@ export function foldSessionStats(events: any[]): SessionStatsResult {
   return out
 }
 
+/** 会话任务清单条目（对齐 harness `@deepseek-ai/dsh-tool-todo` 的 TodoItem）。 */
+export interface SessionTodoItem {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+}
+
+export interface SessionTodosResult {
+  /** 当前任务清单（todo_write 整表快照；新一轮开始后清空，与 harness todos 投影同语义） */
+  todos: SessionTodoItem[]
+  /** 最近一次清单更新时间 */
+  updatedAt: number | null
+  /** 当前（或最后一轮）turn 的开始时间 */
+  turnStartedAt: number | null
+  /** 当前（或最后一轮）turn 的结束时间；未结束为 null */
+  turnEndedAt: number | null
+  /** 事件日志中最后一条带时间戳事件的时间 */
+  lastEventAt: number | null
+  /** 仅按事件日志推断的运行态（caller 可用 live agent 状态覆盖） */
+  running: boolean
+  /** 运行时长：运行中 = now - turnStartedAt；已结束 = 最后一轮 turn 墙钟 */
+  elapsedMs: number
+  /** 事件日志中出现过的 turn 数（含无 step 的空轮） */
+  turns: number
+}
+
+/** 规整模型写入的清单：丢弃空内容、未知状态回落 pending（对齐 harness 的闭合三态）。 */
+function normalizeTodos(raw: any): SessionTodoItem[] {
+  if (!Array.isArray(raw)) return []
+  const out: SessionTodoItem[] = []
+  for (const item of raw) {
+    const content = typeof item?.content === 'string' ? item.content.trim() : ''
+    if (!content) continue
+    const status: SessionTodoItem['status'] = item?.status === 'in_progress' || item?.status === 'completed'
+      ? item.status
+      : 'pending'
+    out.push({ content, status })
+  }
+  return out
+}
+
+/**
+ * 持久事件日志 → 会话任务清单与运行时长。
+ *  - 清单：`todo/write` 整表替换（last-write-wins），`turn/start` 清空
+ *    —— 与 harness `todos` 投影完全一致（turn/end 保留上一轮清单可见）；
+ *  - 运行时长：最后一个 turn 边界决定（turn/start 未闭合 = 运行中）。
+ * 时间戳缺失的事件只跳过自身时间贡献，不影响其他字段。
+ */
+export function foldSessionTodos(events: any[], now: number = Date.now()): SessionTodosResult {
+  const out: SessionTodosResult = {
+    todos: [], updatedAt: null, turnStartedAt: null, turnEndedAt: null,
+    lastEventAt: null, running: false, elapsedMs: 0, turns: 0,
+  }
+  const turnsSeen = new Set<number>()
+  for (const ev of events || []) {
+    const t = eventTime(ev)
+    if (t !== null) out.lastEventAt = out.lastEventAt === null ? t : Math.max(out.lastEventAt, t)
+    switch (ev?.type) {
+      case 'turn/start': {
+        // 新一轮开始即清空上一轮清单（与 harness 投影同语义）
+        out.todos = []
+        out.updatedAt = null
+        out.turnStartedAt = t
+        out.turnEndedAt = null
+        if (finiteNonNegative(ev.data?.turn)) turnsSeen.add(ev.data.turn)
+        break
+      }
+      case 'turn/end': {
+        out.turnEndedAt = t
+        if (finiteNonNegative(ev.data?.turn)) turnsSeen.add(ev.data.turn)
+        break
+      }
+      case 'todo/write': {
+        out.todos = normalizeTodos(ev.data?.todos)
+        out.updatedAt = t
+        break
+      }
+      default:
+        break
+    }
+  }
+  out.turns = turnsSeen.size
+  out.running = out.turnStartedAt !== null && out.turnEndedAt === null
+  if (out.running && out.turnStartedAt !== null) {
+    out.elapsedMs = Math.max(0, now - out.turnStartedAt)
+  } else if (out.turnStartedAt !== null && out.turnEndedAt !== null) {
+    out.elapsedMs = Math.max(0, out.turnEndedAt - out.turnStartedAt)
+  }
+  return out
+}
+
+/** live agent 运行态（权威）：返回 undefined 表示查不到（调用方回退事件推断）。 */
+function liveRunningState(ctx: Context, sessionId: string): boolean | undefined {
+  const agentsService = ctx.get('agents') as any
+  const agent = agentsService?.get ? agentsService.get(sessionId) : undefined
+  if (agent && typeof agent.status === 'string') return agent.status === 'running'
+  return undefined
+}
+
 export function registerSessionRoutes(ctx: Context, router: any, config: WebServiceConfig): void {
   // 1. 查询会话列表
   router.get('/sessions', async (_req: IncomingMessage, res: ServerResponse, _params: any, query: Record<string, string>) => {
@@ -615,6 +713,43 @@ export function registerSessionRoutes(ctx: Context, router: any, config: WebServ
       })
     } catch (err: any) {
       sendJson(res, 500, { ok: false, error: err.message })
+    }
+  })
+
+  // 6.6 会话任务清单（todo_write 投影）+ 运行时长（当前/最后一轮 turn 墙钟）
+  // 供三方控制台（如 OneNat WorkBuddy）在聊天窗口渲染「任务」面板：清单条目 + N 进行中 · M 待处理 + 运行时长。
+  // 运行态以 live agent 状态为权威（事件流中断/进程重启后未闭合的 turn 不会误报运行中）。
+  router.get('/sessions/:id/todos', async (_req: IncomingMessage, res: ServerResponse, params: Record<string, string>) => {
+    try {
+      const sessionId = params.id
+      const events = await loadSessionEvents(ctx, sessionId)
+      const now = Date.now()
+      const result = foldSessionTodos(events, now)
+      const liveRunning = liveRunningState(ctx, sessionId)
+      const running = liveRunning === undefined ? result.running : liveRunning
+      let elapsedMs = 0
+      if (running && result.turnStartedAt !== null) {
+        elapsedMs = Math.max(0, now - result.turnStartedAt)
+      } else if (result.turnStartedAt !== null && result.turnEndedAt !== null) {
+        elapsedMs = Math.max(0, result.turnEndedAt - result.turnStartedAt)
+      }
+      sendJson(res, 200, {
+        ok: true,
+        data: {
+          sessionId,
+          ...result,
+          running,
+          elapsedMs,
+          counts: {
+            completed: result.todos.filter((x) => x.status === 'completed').length,
+            inProgress: result.todos.filter((x) => x.status === 'in_progress').length,
+            pending: result.todos.filter((x) => x.status === 'pending').length,
+          },
+          serverTime: now,
+        },
+      })
+    } catch (err: any) {
+      sendJson(res, 500, { ok: false, error: err?.message || String(err) })
     }
   })
 

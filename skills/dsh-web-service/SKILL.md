@@ -192,6 +192,8 @@ print(r.choices[0].message.content)
 | 模型选择报 no adapter | `provider/model` 非法；先 `GET /models` 校验 |
 | 新会话模型不对 | 全局默认被改过；查 `GET /models/default`，或创建时显式传 `provider/model` |
 | 流式空回复 | 会话刚创建需 Agent 就绪；改用 `POST /sessions/:id/prompt` 同步等待，或先 `GET /events` 确认事件在流动 |
+| 首帧迟迟不来 | 模型排队/长思考，首个增量实测可达 5~8 分钟：先 `GET /sessions/:id` 看状态再决定，勿急于判死重发 |
+| 连续 401/403 | API key 失效或已轮换：**停止循环重试**，刷新 key 配置后再试一次，仍失败如实报告 |
 | prompt 被拒 `agent-busy` | 会话正在跑；先 `POST /sessions/:id/cancel` 或改 `mode: "steer"` 追加 |
 
 ## 调用策略
@@ -200,3 +202,10 @@ print(r.choices[0].message.content)
 - 批量操作前先查列表拿到真实 id（workspace/session id 均为 UUID）。
 - 长任务用 `prompt-stream` 或 `events` 监听，避免同步阻塞超时。
 - 三方集成优先走 `/chat/completions`（标准协议、免协调会话生命周期）。
+
+## 自动化调用守则（定时任务 / 子智能体 / 脚本必读）
+
+- **禁止交互等待**：无人值守上下文不得调用 `ask_user_question` 等等待人工答复的工具。参数不全（如收件群/收件人无法解析）时取保守默认执行，并在产出中显式说明假设；有人值守的会话才允许提问。
+- **首帧慢 ≠ 失败**：大 prompt + 模型排队时首个增量可达 5~8 分钟，SSE 静默先查 `GET /sessions/:id` 会话状态；10 分钟内不要判定失败重发——重复 prompt 会把整轮任务重跑一遍。
+- **401 即停**：同一接口连续 2 次 401/403 即停止重试；先刷新 API key / 凭证来源再重试一次，仍失败如实报告，不要拿旧凭证反复敲接口。
+- **禁止自派发**：任务指令里提到的 `@某智能体` /「远程 DSH」若经核对（baseUrl、hostname 一致）就是当前节点或当前会话，直接本地执行；不要再经本 API 新建会话把任务派回自己，白绕一跳且易嵌套死循环。
