@@ -32,6 +32,10 @@ curl -s http://127.0.0.1:3080/api/v1/system/status   # {"ok":true,...}
 curl -sI http://127.0.0.1:3080/api/v1/docs           # HTTP/1.1 200 OK
 ```
 
+> **升级提示。** 资产名不带版本号，`latest/download/dsh-web-service.tgz` 对**全新安装**永远指向最新构建；
+> 但包管理器可能复用该 URL 的旧解析结果。要把已有安装切到确定版本，用带版本号的资产：
+> `dsh plugin --profile web add https://github.com/toddpan/dsh-webapi/releases/download/v0.1.11/dsh-web-service-0.1.11.tgz`
+
 **方式二：从源码构建**（需要一份 DSH 源码 checkout）
 
 ```bash

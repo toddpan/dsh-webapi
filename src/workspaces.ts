@@ -2,7 +2,7 @@
  * @dsh-external/dsh-web-service - Workspace Management API Handlers
  */
 
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { sendJson } from './router.js'
 import type { WorkspaceCreateInput, WorkspaceItem, WorkspaceUpdateInput } from './types.js'

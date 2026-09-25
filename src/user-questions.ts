@@ -15,7 +15,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks'
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { sendJson, type HttpRouter } from './router.js'

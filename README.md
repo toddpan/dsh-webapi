@@ -34,6 +34,11 @@ curl -s http://127.0.0.1:3080/api/v1/system/status   # {"ok":true,...}
 curl -sI http://127.0.0.1:3080/api/v1/docs           # HTTP/1.1 200 OK
 ```
 
+> **Upgrading.** The asset name carries no version, so `latest/download/dsh-web-service.tgz` always
+> points at the newest build for a *fresh* install — but package managers may reuse a cached
+> resolution of that URL. To move an existing install to a known build, pin the versioned asset:
+> `dsh plugin --profile web add https://github.com/toddpan/dsh-webapi/releases/download/v0.1.11/dsh-web-service-0.1.11.tgz`
+
 **Option 2: build from source** (needs a DSH source checkout)
 
 ```bash

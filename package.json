@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/dsh-web-service",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Expose DSH over HTTP: 47 REST + SSE routes for workspaces, sessions (streaming, history, stats, todos, cancel), models, settings, skills and files, plus an OpenAI-compatible /chat/completions. · 把 DSH 的能力开放成 REST + SSE 接口与 OpenAI 兼容端点，供三方控制台、客户端与 Agent 集成。",
   "type": "module",
   "main": "./lib/index.js",

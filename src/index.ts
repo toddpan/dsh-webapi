@@ -6,8 +6,8 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFileSync } from 'node:fs'
-import type { Context } from 'cordis'
-import z from 'schemastery'
+import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 

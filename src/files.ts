@@ -14,7 +14,7 @@ import { createReadStream } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import { sendJson, type HttpRouter } from './router.js'
 import type { WebServiceConfig } from './types.js'
 

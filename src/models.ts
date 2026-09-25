@@ -2,7 +2,7 @@
  * @dsh-external/dsh-web-service - Model Management & Settings API Handlers
  */
 
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { sendJson } from './router.js'
 import type { DefaultModelSelection, ModelItem, ProviderItem } from './types.js'

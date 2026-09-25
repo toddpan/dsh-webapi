@@ -21,7 +21,7 @@ import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import { sendJson, type HttpRouter } from './router.js'
 import {
   discoverSkills,
