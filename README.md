@@ -1,7 +1,51 @@
 # dsh-webapi (@dsh-external/dsh-web-service)
 
 DeepSeek Harness (DSH) Web Service API 插件：
-把 DSH 所有功能封装为标准 Web Service RESTful API 与 SSE 流式接口，提供给三方系统集成调用。
+把 DSH 的工作区、会话、模型、设置、技能与文件能力暴露为 RESTful API 与 SSE 流式接口，
+并提供 OpenAI 兼容的 `/chat/completions`，供三方系统集成调用或二次开发。
+
+## 安装
+
+兼容 DSH `0.1.0`–`0.1.9`（peer 范围见 `package.json`，已在 `0.1.7-rc.2` 上运行验证）。
+
+**方式一：预构建 tarball（推荐，免构建、免 `allowBuilds` 授权）**
+
+```bash
+dsh plugin --profile web add \
+  https://github.com/toddpan/dsh-webapi/releases/latest/download/dsh-web-service.tgz
+```
+
+`dsh plugin` 会把该包写进 profile 的 `package.json`（依赖 + `dsh.profile.bundles`）；
+带 HMR 的 profile 会立即装配，否则重启 DSH 生效。探活：
+
+```bash
+curl -s http://127.0.0.1:3080/api/v1/system/status   # {"ok":true,...}
+curl -sI http://127.0.0.1:3080/api/v1/docs           # HTTP/1.1 200 OK
+```
+
+**方式二：从源码构建**（需要一份 DSH 源码 checkout）
+
+```bash
+git clone https://github.com/toddpan/dsh-webapi && cd dsh-webapi
+DSH_CHECKOUT=/path/to/deepseek-harness bash scripts/build.sh     # src/ → lib/
+dsh plugin --profile web add "$PWD"
+```
+
+`lib/` 是构建产物、不入库，**所以从 git 直接安装拿不到可运行代码**——请用方式一，或先自行构建。
+`scripts/build.sh` 会从 checkout 软链 `cordis` / `schemastery` / `@deepseek-ai/*` 等 peer，无需 `npm install`。
+
+## 配置
+
+全部可选，装好后写在 profile patch 的插件行 `config` 里（默认值见 `src/index.ts`）：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `pathPrefix` | `/api/v1` | 路由前缀 |
+| `apiKey` | `''` | 非空则开启鉴权，请求需带该 key |
+| `standalonePort` | `0` | `>0` 时额外独立监听端口；`0` 表示只挂主 webserver |
+| `cors` | `true` | 是否允许跨域 |
+| `defaultCwd` | `''` | 默认工作目录，留空取 `process.cwd()` |
+| `maxUploadBytes` | `2 GiB` | 上传大小上限，大文件建议走分片接口 |
 
 ## 功能特性
 
@@ -37,6 +81,7 @@ DeepSeek Harness (DSH) Web Service API 插件：
 | | `DELETE` | `/sessions/:id` | 删除/归档会话 |
 | | `GET` | `/sessions/:id/history` | 分页查询会话历史消息 |
 | | `GET` | `/sessions/:id/stats` | 会话实时统计：轮/步、LLM 与工具调用耗时、首 token 均值、解码吞吐、缓存命中、token 账本（对齐 harness session-stats 投影语义） |
+| | `GET` | `/sessions/:id/todos` | 会话任务清单 + 运行时长：`todos[{content,status}]`（`todo_write` 整表投影，`turn/start` 清空）、`counts{completed,inProgress,pending}`、`running`/`elapsedMs`（当前或最后一轮 turn 墙钟）、`turnStartedAt`/`turnEndedAt`/`updatedAt`（供三方控制台渲染「任务」面板，≥0.1.8） |
 | | `GET` | `/sessions/:id/skills` | 会话作用域技能目录（按会话 cwd 解析技能根，支持 `?search=` 过滤；供输入框 "/" 技能候选，对齐 harness skills/list） |
 | | `GET` | `/sessions/:id/questions` | 查询会话当前挂起的 ask_user_question 问题批次（REST 集成的宿主侧答复桥，≥0.1.7；含 connection 层抢答绕过与 ALS 会话归属） |
 | | `POST` | `/sessions/:id/answers` | 提交挂起问题的答复（`answers: [{id, selected, custom?}]`），resolve 后工具以普通 tool/result 返回、会话继续 |
