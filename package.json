@@ -1,7 +1,7 @@
 {
   "name": "@dsh-external/dsh-web-service",
-  "version": "0.1.8",
-  "description": "把 DSH 的工作区、会话、模型、设置、技能与文件能力暴露为 RESTful + SSE 接口，并提供 OpenAI 兼容的 /chat/completions，供三方系统与 Agent 集成。",
+  "version": "0.1.9",
+  "description": "Expose DSH over HTTP: 47 REST + SSE routes for workspaces, sessions (streaming, history, stats, todos, cancel), models, settings, skills and files, plus an OpenAI-compatible /chat/completions. · 把 DSH 的能力开放成 REST + SSE 接口与 OpenAI 兼容端点，供三方控制台、客户端与 Agent 集成。",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
@@ -10,6 +10,7 @@
     "cordis.patch.yml",
     "skills",
     "README.md",
+    "README.zh.md",
     "LICENSE"
   ],
   "license": "BSD-3-Clause",
@@ -28,7 +29,9 @@
     "api",
     "rest",
     "sse",
-    "openai-compatible"
+    "openai-compatible",
+    "web-service",
+    "remote"
   ],
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
