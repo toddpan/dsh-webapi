@@ -5,6 +5,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { readFileSync } from 'node:fs'
 import type { Context } from 'cordis'
 import z from 'schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -25,6 +26,16 @@ import type { WebServiceConfig } from './types.js'
 
 export const name = '@dsh-external/dsh-web-service'
 export const inject = ['webServer', 'tools']
+
+/** 插件版本：直接读包内 package.json（lib/ 的上一级），避免与发布版本脱节。 */
+const pluginVersion: string = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+    return typeof pkg.version === 'string' ? pkg.version : '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+})()
 
 export interface Config extends WebServiceConfig {}
 
@@ -51,7 +62,7 @@ export function apply(ctx: Context, config: Config): void {
       ok: true,
       data: {
         name: '@dsh-external/dsh-web-service',
-        version: '1.0.0',
+        version: pluginVersion,
         status: 'running',
         port: webServer?.port || 3080,
         standalonePort: config.standalonePort || undefined,

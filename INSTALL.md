@@ -1,4 +1,4 @@
-# dsh-web-service 挂载参考（@dsh-external/dsh-web-service v0.1.9）
+# dsh-web-service 挂载参考（@dsh-external/dsh-web-service）
 
 > 常规安装看 [README.md](README.md)（English）/ [README.zh.md](README.zh.md)（中文）。
 > 本文件补充底层细节：插件行怎么写、preset 怎么挂、peer 依赖有哪些、挂载后怎么验证。
