@@ -214,6 +214,15 @@ export function registerModelRoutes(ctx: Context, router: any): void {
       }
 
       const ns = params.namespace
+      // 保留命名空间：api-keys 属于 /api-keys* 的密钥管理，不进 settingsController
+      if (ns === 'api-keys') {
+        sendJson(res, 404, {
+          ok: false,
+          error: 'Unknown settings namespace: api-keys（密钥管理请用 /api-keys* 接口）',
+          code: 'NOT_FOUND',
+        })
+        return
+      }
       if (!body || typeof body !== 'object') {
         sendJson(res, 400, { ok: false, error: 'Invalid settings patch body', code: 'BAD_REQUEST' })
         return

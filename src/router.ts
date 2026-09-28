@@ -3,7 +3,16 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
 import type { ApiResponse, WebServiceConfig } from './types.js'
+
+/** 常量时间字符串比较（未注入多 Key 鉴权服务时的回落路径用） */
+function timingSafeEqualString(a: string, b: string): boolean {
+  const ab = Buffer.from(a, 'utf8')
+  const bb = Buffer.from(b, 'utf8')
+  if (ab.length !== bb.length) return false
+  return timingSafeEqual(ab, bb)
+}
 
 export type RouteHandler = (
   req: IncomingMessage,
@@ -13,6 +22,14 @@ export type RouteHandler = (
   body: any,
 ) => void | Promise<void>
 
+/**
+ * 鉴权模式：
+ * - public：免鉴权（文档、OpenAPI、设置页 HTML 等不含密钥的只读页面）
+ * - data：  数据面鉴权（普通 API Key，多 Key ∪ 遗留 config.apiKey）
+ * - admin： 跳过数据面闸门，由 handler 自行做管理面鉴权（admin token）
+ */
+export type RouteAuthMode = 'public' | 'data' | 'admin'
+
 export interface RouteEntry {
   method: string
   pattern: RegExp
@@ -20,16 +37,32 @@ export interface RouteEntry {
   handler: RouteHandler
   /** true = 跳过 JSON 解析，把原始请求体 Buffer 交给 handler（文件上传用） */
   rawBody?: boolean
+  /** 鉴权模式，默认 data */
+  auth?: RouteAuthMode
 }
 
 export interface RouteOptions {
   rawBody?: boolean
+  auth?: RouteAuthMode
+}
+
+/** 数据面鉴权服务（由 api-keys-store 提供；未注入时回落到单 config.apiKey 比对） */
+export interface AuthServiceLike {
+  isEnforced(): boolean
+  verifyDataToken(token: string): { ok: boolean; keyId?: string }
+  touch(keyId: string): void
 }
 
 export class HttpRouter {
   private routes: RouteEntry[] = []
+  private auth: AuthServiceLike | null = null
 
   constructor(private config: WebServiceConfig) {}
+
+  /** 注入多 Key 鉴权服务 */
+  setAuthService(auth: AuthServiceLike): void {
+    this.auth = auth
+  }
 
   add(method: string, pathPattern: string, handler: RouteHandler, options?: RouteOptions): void {
     const paramNames: string[] = []
@@ -48,27 +81,28 @@ export class HttpRouter {
       paramNames,
       handler,
       rawBody: options?.rawBody,
+      auth: options?.auth,
     })
   }
 
-  get(pathPattern: string, handler: RouteHandler): void {
-    this.add('GET', pathPattern, handler)
+  get(pathPattern: string, handler: RouteHandler, options?: RouteOptions): void {
+    this.add('GET', pathPattern, handler, options)
   }
 
   post(pathPattern: string, handler: RouteHandler, options?: RouteOptions): void {
     this.add('POST', pathPattern, handler, options)
   }
 
-  put(pathPattern: string, handler: RouteHandler): void {
-    this.add('PUT', pathPattern, handler)
+  put(pathPattern: string, handler: RouteHandler, options?: RouteOptions): void {
+    this.add('PUT', pathPattern, handler, options)
   }
 
-  patch(pathPattern: string, handler: RouteHandler): void {
-    this.add('PATCH', pathPattern, handler)
+  patch(pathPattern: string, handler: RouteHandler, options?: RouteOptions): void {
+    this.add('PATCH', pathPattern, handler, options)
   }
 
-  delete(pathPattern: string, handler: RouteHandler): void {
-    this.add('DELETE', pathPattern, handler)
+  delete(pathPattern: string, handler: RouteHandler, options?: RouteOptions): void {
+    this.add('DELETE', pathPattern, handler, options)
   }
 
   async dispatch(req: IncomingMessage, res: ServerResponse, basePath: string = ''): Promise<boolean> {
@@ -131,27 +165,43 @@ export class HttpRouter {
       }
     }
 
-    // 鉴权拦截 (除了文档和 openapi)
-    const isPublic = targetPath === '/docs' || targetPath === '/openapi.json' || targetPath === '/'
-    if (!isPublic && this.config.apiKey) {
-      const authHeader = req.headers['authorization'] || ''
-      const xApiKey = req.headers['x-api-key']
-      let token = ''
-      if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
-        token = authHeader.slice(7).trim()
-      } else if (typeof xApiKey === 'string') {
-        token = xApiKey.trim()
-      }
+    // 鉴权拦截：按路由声明的模式执行，默认 data
+    const authMode: RouteAuthMode = matchedRoute.auth || 'data'
+    const isPublic =
+      authMode === 'public' ||
+      // 兼容旧行为：这三条始终公开
+      targetPath === '/docs' ||
+      targetPath === '/openapi.json' ||
+      targetPath === '/'
 
-      if (token !== this.config.apiKey) {
-        sendJson(res, 401, {
-          ok: false,
-          error: 'Unauthorized: Invalid or missing API key',
-          code: 'UNAUTHORIZED',
-        })
-        return true
+    if (authMode === 'data' && !isPublic) {
+      const enforced = this.auth ? this.auth.isEnforced() : Boolean(this.config.apiKey)
+      if (enforced) {
+        const authHeader = req.headers['authorization'] || ''
+        const xApiKey = req.headers['x-api-key']
+        let token = ''
+        if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+          token = authHeader.slice(7).trim()
+        } else if (typeof xApiKey === 'string') {
+          token = xApiKey.trim()
+        }
+
+        const verdict = this.auth
+          ? this.auth.verifyDataToken(token)
+          : { ok: timingSafeEqualString(token, this.config.apiKey || ''), keyId: undefined }
+
+        if (!verdict.ok) {
+          sendJson(res, 401, {
+            ok: false,
+            error: 'Unauthorized: Invalid or missing API key',
+            code: 'UNAUTHORIZED',
+          })
+          return true
+        }
+        if (verdict.keyId && this.auth) this.auth.touch(verdict.keyId)
       }
     }
+    // auth === 'admin'：跳过数据面闸门，由 handler 内部做管理面鉴权（admin token）
 
     // 读取并解析 Body（针对 POST/PUT/PATCH）
     let body: any = null
@@ -201,8 +251,9 @@ export class HttpRouter {
   private setCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
     const origin = req.headers['origin'] || '*'
     res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Vary', 'Origin')
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, Accept')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, X-Admin-Token, Accept')
     res.setHeader('Access-Control-Max-Age', '86400')
   }
 }

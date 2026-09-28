@@ -4,6 +4,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebServiceConfig } from './types.js'
+import { pluginVersion } from './version.js'
 
 export function registerOpenApiRoutes(router: any, config: WebServiceConfig): void {
   const prefix = config.pathPrefix || '/api/v1'
@@ -16,15 +17,24 @@ export function registerOpenApiRoutes(router: any, config: WebServiceConfig): vo
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.end(jsonStr)
-  })
+  }, { auth: 'public' })
 
   // 2. 内置交互式 API 文档页面 (GET /docs)
   router.get('/docs', (_req: IncomingMessage, res: ServerResponse) => {
     const html = generateDocsHtml(prefix, config.apiKey ? true : false)
     res.statusCode = 200
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.setHeader('Cache-Control', 'no-store')
     res.end(html)
-  })
+  }, { auth: 'public' })
+
+  // 3. 在线接口文档（GET /docs/reference）：Redoc 渲染完整 OpenAPI，打开链接即可预览
+  router.get('/docs/reference', (_req: IncomingMessage, res: ServerResponse) => {
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.setHeader('Cache-Control', 'no-store')
+    res.end(generateReferenceHtml(prefix))
+  }, { auth: 'public' })
 }
 
 function generateOpenApiSpec(prefix: string) {
@@ -32,7 +42,7 @@ function generateOpenApiSpec(prefix: string) {
     openapi: '3.0.0',
     info: {
       title: 'DeepSeek Harness (DSH) Web Service API',
-      version: '1.0.0',
+      version: pluginVersion,
       description: '提供给第三方系统调用的 DSH 全功能 Web Service API，支持工作区、会话生命周期、模型配置管理、SSE流式响应及OpenAI协议兼容。',
     },
     servers: [
@@ -41,6 +51,9 @@ function generateOpenApiSpec(prefix: string) {
         description: 'DSH Web Service Endpoint',
       },
     ],
+    // 根级鉴权声明：Swagger UI 等调试工具据此渲染 Authorize 弹窗，鉴权后可对全部数据面接口在线试调；
+    // 管理面接口各自声明的 AdminTokenAuth 会覆盖此默认值。
+    security: [{ BearerAuth: [] }, { ApiKeyAuth: [] }],
     components: {
       securitySchemes: {
         BearerAuth: {
@@ -52,6 +65,12 @@ function generateOpenApiSpec(prefix: string) {
           type: 'apiKey',
           in: 'header',
           name: 'X-API-Key',
+        },
+        AdminTokenAuth: {
+          type: 'apiKey',
+          in: 'header',
+          name: 'X-Admin-Token',
+          description: 'API Key 管理面令牌（也接受 Authorization: Bearer <admin-token>），与数据面 API Key 是两套凭证。',
         },
       },
     },
@@ -505,9 +524,178 @@ function generateOpenApiSpec(prefix: string) {
           responses: { 200: { description: 'application/gzip 归档' } },
         },
       },
+
+      // ==================== API Key 管理（管理面，需 Admin Token） ====================
+      '/api-keys': {
+        get: {
+          summary: '列出 API Key（脱敏）',
+          description:
+            '管理面接口：需携带 Admin Token（Authorization: Bearer / X-Admin-Token），默认仅允许回环地址访问。' +
+            '响应只含前缀与掩码，绝不返回明文或哈希。',
+          tags: ['API Keys'],
+          security: [{ AdminTokenAuth: [] }],
+          parameters: [
+            { name: 'includeRevoked', in: 'query', schema: { type: 'string', enum: ['true', 'false'] }, description: '是否包含已吊销记录，默认 true' },
+          ],
+          responses: {
+            200: { description: '脱敏 Key 列表' },
+            401: { description: '缺少或错误的管理令牌' },
+            403: { description: '跨源或非回环地址被拒绝' },
+          },
+        },
+        post: {
+          summary: '新建 API Key',
+          description: '返回的 plaintext 是完整密钥，**仅此一次**出现在响应中，之后不可再取回。',
+          tags: ['API Keys'],
+          security: [{ AdminTokenAuth: [] }],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string', maxLength: 64, description: '名称，仅用于识别' },
+                    note: { type: 'string', maxLength: 256, description: '备注' },
+                    expiresInDays: { type: 'number', description: '多少天后过期；不传 = 永不过期' },
+                    plaintext: {
+                      type: 'string',
+                      minLength: 16,
+                      maxLength: 256,
+                      pattern: '^[\\x21-\\x7e]+$',
+                      description:
+                        '自定义 Key 值（粘贴已有 Key）；不传则由服务端随机生成 256 位高熵 Key。' +
+                        '只允许可见 ASCII、长度 16-256。自定义值只保存哈希，且不展示任何明文片段；' +
+                        '若已有同值的**有效**记录会被拒绝（已吊销/已过期的值可重新登记）。',
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: { description: '创建成功，含一次性明文 Key' },
+            400: { description: '参数非法，或该 Key 值已有一条有效记录' },
+            401: { description: '缺少或错误的管理令牌' },
+            503: { description: '存储写入失败，本次没有产生 Key' },
+          },
+        },
+      },
+      '/api-keys/{id}': {
+        patch: {
+          summary: '修改名称 / 备注 / 过期时间',
+          tags: ['API Keys'],
+          security: [{ AdminTokenAuth: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string' },
+                    note: { type: 'string' },
+                    expiresAt: { type: 'number', nullable: true, description: 'epoch ms；传 null 清除过期时间' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: '脱敏记录' },
+            404: { description: 'Key 不存在，或来自插件配置不支持修改' },
+          },
+        },
+        delete: {
+          summary: '删除记录（仅限已吊销的 Key）',
+          description:
+            '从存储中永久移除一条**已吊销**的 managed Key 记录（清理审计残留）；' +
+            '有效 Key、已过期未吊销的 Key 与插件配置遗留记录不可删除。',
+          tags: ['API Keys'],
+          security: [{ AdminTokenAuth: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: '已删除' },
+            404: { description: 'Key 不存在，或不是「已吊销」状态不可删除' },
+            503: { description: '存储写入失败，记录仍保留' },
+          },
+        },
+      },
+      '/api-keys/{id}/rotate': {
+        post: {
+          summary: '轮换 Key（旧 Key 立即失效）',
+          description: '旧记录标记为 revoked/rotated；新 Key 明文仅返回一次。',
+          tags: ['API Keys'],
+          security: [{ AdminTokenAuth: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: '新 Key（含一次性明文）' },
+            404: { description: 'Key 不存在，或来自插件配置不支持轮换' },
+          },
+        },
+      },
+      '/api-keys/{id}/revoke': {
+        post: {
+          summary: '吊销 Key（幂等，不可恢复）',
+          tags: ['API Keys'],
+          security: [{ AdminTokenAuth: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: '已吊销' },
+            404: { description: 'Key 不存在，或来自插件配置不支持吊销' },
+          },
+        },
+      },
+      '/api-keys/auth': {
+        get: {
+          summary: '查询鉴权状态',
+          tags: ['API Keys'],
+          security: [{ AdminTokenAuth: [] }],
+          responses: { 200: { description: '鉴权开关、有效 Key 数、存储健康度' } },
+        },
+        put: {
+          summary: '开启 / 关闭鉴权',
+          description:
+            '关闭鉴权必须传 confirm: "disable-auth"；插件配置中存在 apiKey 时鉴权被强制开启、不可关闭；' +
+            '没有任何有效 Key 时不允许开启鉴权（避免把自己锁在外面）。',
+          tags: ['API Keys'],
+          security: [{ AdminTokenAuth: [] }],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['enabled'],
+                  properties: {
+                    enabled: { type: 'boolean' },
+                    confirm: { type: 'string', enum: ['disable-auth'] },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: '已保存' },
+            400: { description: '参数非法，或当前状态不允许该操作' },
+          },
+        },
+      },
     },
   }
 }
+
+/** 项目主页（页头 GitHub 跳转按钮） */
+const GITHUB_URL = 'https://github.com/toddpan/dsh-webapi'
+/** 问题反馈（GitHub Issues） */
+const ISSUES_URL = GITHUB_URL + '/issues'
+/** GitHub Octicon 标志（fill=currentColor 随按钮变色） */
+const GITHUB_ICON =
+  '<svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" aria-hidden="true" style="flex:0 0 auto;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>'
+/** Octicon comment-16（问题反馈图标） */
+const FEEDBACK_ICON =
+  '<svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" aria-hidden="true" style="flex:0 0 auto;"><path d="M1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H9.06l-2.573 2.573A1.458 1.458 0 0 1 4 13.543V12H2.75A1.75 1.75 0 0 1 1 10.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h4.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>'
+/** Octicon sync-16（检查更新图标） */
+const SYNC_ICON =
+  '<svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" aria-hidden="true" style="flex:0 0 auto;"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>'
 
 function generateDocsHtml(prefix: string, requireAuth: boolean): string {
   return `<!DOCTYPE html>
@@ -541,6 +729,8 @@ function generateDocsHtml(prefix: string, requireAuth: boolean): string {
     .auth-box input { flex: 1; background: var(--code-bg); border: 1px solid var(--border); color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 14px; }
     .btn { background: var(--primary); color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; transition: background 0.2s; }
     .btn:hover { background: var(--primary-hover); }
+    .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    .btn-ghost:hover { background: var(--card-bg); }
     .section-title { font-size: 18px; margin: 28px 0 14px; color: #e2e8f0; display: flex; align-items: center; gap: 8px; }
     .api-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 14px; overflow: hidden; }
     .api-header { padding: 12px 16px; display: flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; }
@@ -551,6 +741,14 @@ function generateDocsHtml(prefix: string, requireAuth: boolean): string {
     .method.delete { background: var(--tag-delete); }
     .path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; font-weight: 600; color: #e2e8f0; }
     .desc { color: var(--text-muted); font-size: 13px; margin-left: auto; }
+    .version-tag { font-size: 13px; font-weight: 500; color: var(--text-muted); background: var(--card-bg); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; vertical-align: middle; margin-left: 8px; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    /* 检查更新弹层 */
+    dialog { border: 1px solid var(--border); background: var(--card-bg); color: var(--text); border-radius: 8px; padding: 0; width: min(480px, calc(100vw - 32px)); box-shadow: 0 24px 64px rgba(0,0,0,.55); }
+    dialog::backdrop { background: rgba(2,6,23,.72); }
+    dialog .modal-head { padding: 16px 20px; border-bottom: 1px solid var(--border); font-size: 16px; font-weight: 600; }
+    dialog .modal-body { padding: 20px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
+    dialog .modal-foot { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
     .api-body { padding: 16px; border-top: 1px solid var(--border); background: rgba(15, 23, 42, 0.5); display: none; }
     .api-card.open .api-body { display: block; }
     .form-group { margin-bottom: 12px; }
@@ -564,11 +762,16 @@ function generateDocsHtml(prefix: string, requireAuth: boolean): string {
   <div class="container">
     <header>
       <div>
-        <h1>DeepSeek Harness Web Service API</h1>
+        <h1>DeepSeek Harness Web Service API <span class="version-tag">v${pluginVersion}</span></h1>
         <div class="subtitle">三方调用专属接口平台 &bull; 基础前缀: <code>${prefix}</code></div>
       </div>
-      <div>
-        <a href="${prefix}/openapi.json" target="_blank" class="btn" style="text-decoration:none;">查看 OpenAPI JSON</a>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <a href="${prefix}/docs/reference" class="btn btn-ghost" style="text-decoration:none;">在线调试 (Swagger)</a>
+        <a href="${GITHUB_URL}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${GITHUB_ICON}<span>GitHub</span></a>
+        <a href="${ISSUES_URL}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${FEEDBACK_ICON}<span>问题反馈</span></a>
+        <button class="btn btn-ghost" id="btnCheckUpdate" onclick="checkUpdate(this)" style="display:inline-flex; align-items:center; gap:6px;">${SYNC_ICON}<span>检查更新</span></button>
+        <a href="${prefix}/settings/api-keys" class="btn" style="text-decoration:none;">管理 API Key</a>
+        <a href="${prefix}/openapi.json" target="_blank" class="btn btn-ghost" style="text-decoration:none;">查看 OpenAPI JSON</a>
       </div>
     </header>
 
@@ -576,6 +779,7 @@ function generateDocsHtml(prefix: string, requireAuth: boolean): string {
       <span style="font-size: 14px; font-weight: 600;">API Key 鉴权：</span>
       <input type="password" id="apiKeyInput" placeholder="${requireAuth ? '请输入配置的 Bearer Token' : '当前未开启强制鉴权，可留空'}">
       <button class="btn" onclick="saveApiKey()">保存凭据</button>
+      <span class="desc" style="margin-left:0; font-size:12px; color:var(--text-muted);">此处仅保存在浏览器本地，与服务器端的 Key 管理无关；生成 / 吊销密钥请到 <a href="${prefix}/settings/api-keys" style="color:#60a5fa;">设置页</a></span>
     </div>
 
     <!-- 1. 工作区管理 -->
@@ -727,7 +931,24 @@ function generateDocsHtml(prefix: string, requireAuth: boolean): string {
 
   </div>
 
+  <!-- 检查更新 -->
+  <dialog id="dlgUpdate" aria-labelledby="dlgUpdateTitle">
+    <div class="modal-head" id="dlgUpdateTitle">检查更新</div>
+    <div class="modal-body">
+      <div id="updateResult">正在检查更新…</div>
+    </div>
+    <div class="modal-foot">
+      <a id="updateReleaseLink" href="${GITHUB_URL}/releases" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:none;">打开 Releases 页</a>
+      <button class="btn" onclick="closeDialog()">关闭</button>
+    </div>
+  </dialog>
+
   <script>
+    function closeDialog() {
+      const d = document.getElementById('dlgUpdate');
+      if (d && d.open) d.close();
+    }
+
     function toggleCard(header) {
       header.parentElement.classList.toggle('open');
     }
@@ -742,6 +963,40 @@ function generateDocsHtml(prefix: string, requireAuth: boolean): string {
       const saved = localStorage.getItem('dsh_api_key');
       if (saved) document.getElementById('apiKeyInput').value = saved;
     };
+
+    // ---------- 检查更新（公开端点 /system/updates，失败时给出 Releases 链接兜底） ----------
+    async function checkUpdate(btn) {
+      const dlg = document.getElementById('dlgUpdate');
+      const box = document.getElementById('updateResult');
+      const link = document.getElementById('updateReleaseLink');
+      if (btn) btn.disabled = true;
+      box.textContent = '正在检查更新…';
+      link.style.display = 'none';
+      dlg.showModal();
+      try {
+        const res = await fetch('${prefix}/system/updates', { cache: 'no-store' });
+        const json = await res.json();
+        const d = (json && json.data) || {};
+        if (!json || json.ok !== true) throw new Error((json && json.error) || ('HTTP ' + res.status));
+        const lines = ['当前版本：v' + (d.current || '?')];
+        if (d.latest) lines.push('最新版本：v' + d.latest);
+        if (d.updateAvailable === true) {
+          lines.push('✅ 有新版本可用，请到 Releases 页下载更新。');
+          if (d.releaseUrl) { link.href = d.releaseUrl; link.style.display = ''; }
+        } else if (d.updateAvailable === false) {
+          lines.push(d.error ? 'ℹ️ ' + d.error + '，以本地版本为准。' : '✅ 已是最新版本。');
+        } else {
+          lines.push('⚠️ 检查失败：' + (d.error || '网络不可达') + '。可稍后重试，或直接访问 Releases 页。');
+          link.style.display = '';
+        }
+        box.textContent = lines.join('\\n');
+      } catch (err) {
+        box.textContent = '⚠️ 检查失败：' + (err.message || err) + '\\n请确认本机能否访问 GitHub，或直接访问 Releases 页。';
+        link.style.display = '';
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
 
     async function sendReq(url, method, body, btn) {
       const box = btn.parentElement.nextElementSibling;
@@ -798,6 +1053,58 @@ function generateDocsHtml(prefix: string, requireAuth: boolean): string {
       } catch (err) {
         box.textContent += '\\n流连接错误: ' + err.message;
       }
+    }
+  </script>
+</body>
+</html>`
+}
+
+/**
+ * 在线接口文档与调试（GET /docs/reference）：Swagger UI 渲染 /openapi.json 全量规范，
+ * 与 Swagger 一样支持 Authorize 预置凭证 + 每个接口 Try it out 在线调试。
+ * 脚本走公共 CDN；加载失败时降级为指引（下载 openapi.json 或回到交互式 /docs）。
+ */
+function generateReferenceHtml(prefix: string): string {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>DSH Web Service 接口调试 · v${pluginVersion}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+  <style>
+    html { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif; background: #fff; }
+    #cdn-fail { display: none; max-width: 720px; margin: 48px auto; padding: 20px 24px; border: 1px solid #e2e8f0; border-radius: 8px; color: #334155; line-height: 1.8; }
+    #cdn-fail code { background: #f1f5f9; border-radius: 4px; padding: 1px 6px; font-size: 13px; }
+    .version-float { position: fixed; right: 16px; bottom: 12px; z-index: 10; font-size: 12px; color: #64748b; background: rgba(255,255,255,.85); border: 1px solid #e2e8f0; border-radius: 999px; padding: 2px 10px; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <span class="version-float">v${pluginVersion}</span>
+  <div id="cdn-fail">
+    <strong>调试脚本加载失败（CDN 不可达）</strong><br>
+    可以直接查看机器可读规范：<a href="${prefix}/openapi.json">openapi.json</a>；<br>
+    或使用无需外网的内置交互式文档：<a href="${prefix}/docs">DeepSeek Harness Web Service API</a>。
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js" onerror="document.getElementById('cdn-fail').style.display='block'"></script>
+  <script>
+    if (window.SwaggerUIBundle) {
+      window.SwaggerUIBundle({
+        dom_id: '#swagger-ui',
+        url: '${prefix}/openapi.json',
+        // 在线调试：默认展开 Try it out；Authorize 后的凭证持久化到 localStorage
+        tryItOutEnabled: true,
+        persistAuthorization: true,
+        displayRequestDuration: true,
+        docExpansion: 'list',
+        deepLinking: true,
+        filter: true,
+      });
+    } else {
+      document.getElementById('cdn-fail').style.display = 'block';
     }
   </script>
 </body>

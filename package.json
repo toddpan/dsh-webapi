@@ -1,12 +1,22 @@
 {
   "name": "@dsh-external/dsh-web-service",
-  "version": "0.1.11",
-  "description": "Expose DSH over HTTP: 47 REST + SSE routes for workspaces, sessions (streaming, history, stats, todos, cancel), models, settings, skills and files, plus an OpenAI-compatible /chat/completions. · 把 DSH 的能力开放成 REST + SSE 接口与 OpenAI 兼容端点，供三方控制台、客户端与 Agent 集成。",
+  "version": "0.3.0",
+  "description": "Expose DSH over HTTP: 60 REST + SSE routes for workspaces, sessions (streaming, history, stats, todos, cancel), models, settings, API keys, skills and files, plus an OpenAI-compatible /chat/completions and an API Key settings page. · 把 DSH 的能力开放成 REST + SSE 接口与 OpenAI 兼容端点，附 API Key 设置页，供三方控制台、客户端与 Agent 集成。",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    }
+  },
   "files": [
     "lib",
+    "client",
     "cordis.patch.yml",
     "skills",
     "README.md",
@@ -50,6 +60,14 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ],
+      "platform": "web"
     }
   }
 }

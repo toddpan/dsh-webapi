@@ -9,7 +9,7 @@ REST 接口与 SSE 流，再加一个 OpenAI 兼容的 `/chat/completions`，现
 把 DSH 当成工具调用的其它 Agent，或在 DSH 前面再包一层自己的 API 网关。
 
 - **零新增依赖**：插件只 `inject` `webServer` 与 `tools`，路由挂在 DSH 宿主的 webserver 上（也可选独立端口）。
-- **47 条路由**（REST + SSE），内置 OpenAPI 3.0 规范与在线调试页。
+- **60 条路由**（REST + SSE），内置 OpenAPI 3.0 规范、在线调试页与 API Key 设置页。
 - **自带 SKILL**：`skills/dsh-web-service/SKILL.md` 教会 DSH 里的 Agent 调用本 API（流式、中止、
   回答挂起问题、上传文件等）。
 
@@ -59,6 +59,75 @@ dsh plugin --profile web add "$PWD"
 | `cors` | `true` | 是否允许跨域 |
 | `defaultCwd` | `''` | 默认工作目录，留空取 `process.cwd()` |
 | `maxUploadBytes` | `2 GiB` | 上传大小上限，大文件建议走分片接口 |
+| `adminRemoteAccess` | `false` | 是否允许**非回环**地址访问 API Key 管理接口；默认仅本机可管理密钥 |
+
+> `apiKey` 只是「遗留单 Key」，向后兼容用。日常管理请到设置页生成/吊销多条 Key，详见
+> [API Key 管理](#api-key-管理设置页)。
+
+## API Key 管理（设置页）
+
+打开 **`GET /api/v1/settings/api-keys`** 即可在一个页面里管理三方调用鉴权的密钥：
+查看（脱敏）、新建、轮换、吊销、开启/关闭鉴权。`/docs` 页头部也有「管理 API Key」入口。
+
+**三个入口**
+
+| 入口 | 说明 |
+|---|---|
+| DSH Web GUI 侧边栏「API Key 管理」 | 插件自带浏览器半边（client half），装好并重启 DSH 后出现在侧边栏，内嵌本页 |
+| `GET /api/v1/settings/api-keys` | 独立页面，可直接收藏 |
+| `/docs` 页头「管理 API Key」按钮 | 从 API 文档一键跳转 |
+
+页面按**管理令牌闸门**设计：密钥管理与普通 API 调用是两套凭证。首次打开会要求输入管理令牌，
+页面会直接给出取令牌的命令（在运行 DSH 的机器上执行）：
+`cat <DSH 配置根>/dsh-web-service/admin-token`，粘贴一次后保存在浏览器 localStorage。
+未通过闸门时，页头的「新建 API Key」等管理按钮一律收起——不会出现「点了按钮才报 401」的死胡同。
+
+新建时有**两种 Key 值来源**，对应 `POST /api-keys` 的 `plaintext` 字段：
+
+| 方式 | 行为 |
+|---|---|
+| 随机生成（默认） | 服务端生成 `dsk_` + 32 字节 CSPRNG（256 位熵） |
+| **使用自定义 Key** | 粘贴你已有的 Key（16-256 位可见 ASCII），用于接入既有客户端或迁移 |
+
+> 自定义 Key 的强度由你负责，因此它**连前缀都不展示**（列表里标记「自定义」）——否则一个
+> `my-secret-api-key-xxx` 露出前 12 位就泄露了大半价值。服务端同样只保存哈希。
+> 同值的**有效**记录会被拒绝（400）；已吊销 / 已过期的值可以重新登记。
+
+**两套凭证，互不通用**
+
+| 用途 | 凭证 | 头部写法 |
+|---|---|---|
+| 调用业务接口（数据面） | API Key | `Authorization: Bearer <key>` 或 `X-API-Key: <key>` |
+| 管理密钥（管理面） | Admin Token | `Authorization: Bearer <admin-token>` 或 `X-Admin-Token: <admin-token>` |
+
+这样持有 API Key 的三方客户端无法给自己增发密钥。Admin Token 由插件**首次启动时自动生成**，
+存放在 DSH 配置根下的 `dsh-web-service/admin-token`（权限 0600）：
+
+```bash
+cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
+```
+
+**安全约定**
+
+- 完整 Key **只在新建/轮换成功的一次性弹层里出现一次**，之后页面只显示前缀 + 掩码，无法找回；
+  落盘只存 `sha256(明文)`，明文永不写入磁盘、日志或错误信息。
+- 管理接口默认**只允许本机（回环）访问**；远程管理需显式设置 `adminRemoteAccess: true`。
+  浏览器请求一律做同源校验（防 CSRF / DNS rebinding），跨源返回 `403 FORBIDDEN_ORIGIN`。
+- 吊销立即生效且不可恢复；轮换会让旧 Key 立即失效——更稳妥的做法是先「新建」替代 Key 分发，
+  确认切换完成后再吊销旧的。
+- 插件配置里存在 `apiKey` 时鉴权被**强制开启**，页面上无法关闭（防止误放松保护）；
+  没有任何有效 Key 时也不允许开启鉴权，避免把自己锁在外面。
+- 密钥存储文件损坏时按 fail-closed 处理：不放松鉴权，`/system/status` 会报 `keysStoreDegraded`。
+  损坏文件会改名为 `api-keys.json.corrupt-<时间戳>` 保留取证，并自动从 `api-keys.json.bak`
+  （每次成功写入后更新的「最后已知良好状态」）恢复，不会静默丢弃既有密钥记录。
+- 管理接口的回环判定看的是 TCP 对端地址。若 DSH 前面挂了反向代理 / 隧道（例如把端口转发到公网），
+  插件会把代理端当成对端地址，此时回环护栏形同虚设——必须自行在网络层收口，或保持
+  `adminRemoteAccess: false` 并只在本机做管理操作。
+- 数据面（业务接口）的鉴权是 Bearer / API Key 校验，**不含**同源校验：它本来就面向跨域三方客户端，
+  因此浏览器页面携带有效 Key 的跨源请求属于预期能力；跨域放行范围由 `cors` 控制。
+- 管理令牌会保存在浏览器 `localStorage`，公用电脑用完请在页面上「清除本机管理令牌」。
+
+数据文件位于 `<DSH_HOME>/dsh-web-service/api-keys.json`（0600）。
 
 ## 功能特性
 
@@ -75,6 +144,8 @@ dsh plugin --profile web add "$PWD"
    - OpenAPI 3.0 规范：`GET /api/v1/openapi.json`
 7. **交互式会话**：读取挂起的 `ask_user_question` 问题并经 REST 作答、中止正在跑的轮次、
    上传/列出/下载工作区文件（含分片续传上传）。
+8. **API Key 设置页与密钥管理**：`GET /api/v1/settings/api-keys` 一页管理三方调用密钥——
+   多 Key 并存可命名、脱敏展示、新建/轮换/吊销、开启关闭鉴权；明文只显示一次，落盘只存哈希。
 
 ## API 路由汇总
 
@@ -115,7 +186,17 @@ dsh plugin --profile web add "$PWD"
 | | `GET` | `/presets` | 查询可用 Agent Preset 清单 |
 | **Settings** | `GET` | `/settings` | 获取系统设置配置命名空间 |
 | | `PATCH` | `/settings/:namespace` | 更新指定命名空间配置 |
+| **API Keys** | `GET` | `/settings/api-keys` | **API Key 设置页**（HTML，公开；数据接口需 Admin Token） |
+| | `GET` | `/api-keys` | 列出 API Key（脱敏，不含明文/哈希） |
+| | `POST` | `/api-keys` | 新建 API Key（明文仅返回一次） |
+| | `PATCH` | `/api-keys/:id` | 修改名称 / 备注 / 过期时间 |
+| | `POST` | `/api-keys/:id/rotate` | 轮换（旧 Key 立即失效，新 Key 明文仅一次） |
+| | `POST` | `/api-keys/:id/revoke` | 吊销（幂等，不可恢复） |
+| | `DELETE` | `/api-keys/:id` | 删除记录（仅限已吊销的 Key） |
+| | `GET` | `/api-keys/auth` | 查询鉴权状态 |
+| | `PUT` | `/api-keys/auth` | 开启 / 关闭鉴权（关闭需 `confirm: "disable-auth"`） |
 | **Docs** | `GET` | `/docs` | 内置交互式 API 测试页面 |
+| | `GET` | `/docs/reference` | 在线接口文档与调试（Swagger UI，全量接口 Try it out） |
 | | `GET` | `/openapi.json` | OpenAPI 3.0 接口定义 |
 
 ## 开发与构建

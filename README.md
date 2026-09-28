@@ -11,7 +11,7 @@ an agent, a non-DSH agent that calls DSH as a tool, or a gateway that puts DSH b
 
 - **No new dependencies** — the plugin only `inject`s `webServer` and `tools`; the routes ride on the
   DSH host webserver (or an optional standalone port).
-- **47 routes** (REST + SSE), documented by a built-in OpenAPI 3.0 spec and a request page.
+- **60 routes** (REST + SSE), documented by a built-in OpenAPI 3.0 spec and a request page, plus an API Key settings page.
 - **Bilingual skill included** — `skills/dsh-web-service/SKILL.md` teaches a DSH agent how to drive
   the API (streaming, cancelling, answering pending questions, file uploads).
 
@@ -64,6 +64,83 @@ All fields are optional; they live in the plugin row's `config` in your profile 
 | `cors` | `true` | Allow cross-origin requests |
 | `defaultCwd` | `''` | Default working directory; empty means `process.cwd()` |
 | `maxUploadBytes` | `2 GiB` | Upload size limit; use the chunked endpoints for bigger files |
+| `adminRemoteAccess` | `false` | Whether non-loopback clients may reach the API Key admin endpoints; key management is local-only by default |
+
+> `apiKey` is only a **legacy single key**, kept for backward compatibility. Manage keys from the
+> settings page instead — see [API Key management](#api-key-management-settings-page).
+
+## API Key management (settings page)
+
+Open **`GET /api/v1/settings/api-keys`** to manage the keys third parties use to call the API:
+view (masked), create, rotate, revoke, and turn authentication on or off. The `/docs` page also
+links to it from its header.
+
+**Three entry points**
+
+| Entry | Notes |
+|---|---|
+| "API Key 管理" in the DSH Web GUI sidebar | The plugin ships a browser half (client half); after a DSH restart the panel appears in the sidebar and embeds this page |
+| `GET /api/v1/settings/api-keys` | The standalone page — bookmarkable |
+| "管理 API Key" button on `/docs` | One click from the API docs |
+
+The page sits behind an **admin token gate**: key management and normal API calls use two separate
+credentials. On first open it asks for the admin token and shows the exact command to read it (run
+on the machine that hosts DSH): `cat <DSH home>/dsh-web-service/admin-token`. The token is then kept
+in the browser's localStorage. Until the gate passes, management buttons such as "新建 API Key" stay
+hidden — no "click, then hit 401" dead ends.
+
+Creating a key offers **two sources for the key value** (the `plaintext` field on `POST /api-keys`):
+
+| Mode | Behaviour |
+|---|---|
+| Random (default) | Server generates `dsk_` + 32 bytes of CSPRNG (256-bit entropy) |
+| **Use a custom key** | Paste an existing key (16–256 visible ASCII chars) to slot into an existing client or migrate |
+
+> The strength of a custom key is your responsibility, so it **never shows even a prefix** — otherwise
+> `my-secret-api-key-xxx` would leak most of its value in the first 12 characters. The server still
+> stores only its hash, and the list marks such records as custom. A value that already has an
+> **active** record is rejected (400); revoked/expired values may be registered again.
+
+**Two separate credentials**
+
+| Purpose | Credential | Header |
+|---|---|---|
+| Call business endpoints (data plane) | API Key | `Authorization: Bearer <key>` or `X-API-Key: <key>` |
+| Manage keys (admin plane) | Admin Token | `Authorization: Bearer <admin-token>` or `X-Admin-Token: <admin-token>` |
+
+So a third party holding an API key cannot mint new keys for itself. The Admin Token is generated
+on first startup and stored under the DSH config root in `dsh-web-service/admin-token` (mode 0600):
+
+```bash
+cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
+```
+
+**Security contract**
+
+- The full key is shown **exactly once**, in the one-shot dialog after create/rotate. Afterwards only
+  the prefix and a mask are shown; it cannot be recovered. Only `sha256(plaintext)` is persisted —
+  the plaintext never reaches disk, logs or error messages.
+- Admin endpoints accept **loopback clients only** by default. Remote key management requires
+  `adminRemoteAccess: true`. Browser requests are same-origin checked (CSRF / DNS-rebinding);
+  cross-origin gets `403 FORBIDDEN_ORIGIN`.
+- Revoking is immediate and irreversible; rotating invalidates the old key at once. The safer path
+  is: create a replacement key, roll it out, then revoke the old one.
+- When `apiKey` is set in the plugin config, auth is **forced on** and cannot be switched off from
+  the page. Auth cannot be switched on when no valid key exists, which would lock you out.
+- A corrupt key store fails closed: auth is never relaxed and `/system/status` reports
+  `keysStoreDegraded`. The corrupt file is renamed to `api-keys.json.corrupt-<timestamp>` for
+  forensics and the store recovers from `api-keys.json.bak` (the last known good state, refreshed
+  after every successful write), so existing key records are never silently dropped.
+- The loopback guard looks at the TCP peer address. If DSH sits behind a reverse proxy or tunnel the
+  plugin sees the proxy as the peer, so the guard is effectively bypassed — close it off at the
+  network layer, or keep `adminRemoteAccess: false` and manage keys locally only.
+- Data-plane auth is a Bearer/API-Key check with **no** same-origin rule: it is built for
+  cross-origin third-party clients, so a browser page sending a valid key cross-origin is by design.
+  The cross-origin surface is governed by the `cors` option.
+- The admin token is stored in the browser `localStorage`; use "clear local admin token" on shared
+  machines.
+
+The store lives at `<DSH_HOME>/dsh-web-service/api-keys.json` (mode 0600).
 
 ## Features
 
@@ -79,6 +156,9 @@ All fields are optional; they live in the plugin row's `config` in your profile 
    `GET /api/v1/openapi.json`.
 7. **Interactive sessions** — read pending `ask_user_question` batches and answer them over REST, cancel
    a running turn, upload/list/download workspace files (including resumable chunked upload).
+8. **API Key settings page** — `GET /api/v1/settings/api-keys` manages third-party access keys in one
+   place: multiple named keys, masked display, create / rotate / revoke, and an auth on/off switch.
+   Plaintext is shown once; only hashes are persisted.
 
 ## API routes
 
@@ -119,7 +199,17 @@ Default prefix: `/api/v1`
 | | `GET` | `/presets` | Available agent presets |
 | **Settings** | `GET` | `/settings` | Settings namespaces |
 | | `PATCH` | `/settings/:namespace` | Update one namespace |
+| **API Keys** | `GET` | `/settings/api-keys` | **API Key settings page** (HTML, public; data endpoints need the Admin Token) |
+| | `GET` | `/api-keys` | List API keys (masked; never returns plaintext or hashes) |
+| | `POST` | `/api-keys` | Create an API key (plaintext returned once) |
+| | `PATCH` | `/api-keys/:id` | Update name / note / expiry |
+| | `POST` | `/api-keys/:id/rotate` | Rotate (old key dies immediately; new plaintext returned once) |
+| | `POST` | `/api-keys/:id/revoke` | Revoke (idempotent, irreversible) |
+| | `DELETE` | `/api-keys/:id` | Delete the record (revoked keys only) |
+| | `GET` | `/api-keys/auth` | Read auth status |
+| | `PUT` | `/api-keys/auth` | Enable / disable auth (disabling requires `confirm: "disable-auth"`) |
 | **Docs** | `GET` | `/docs` | Interactive API request page |
+| | `GET` | `/docs/reference` | Full API reference & online debugging (Swagger UI, try-it-out) |
 | | `GET` | `/openapi.json` | OpenAPI 3.0 document |
 
 ## Development

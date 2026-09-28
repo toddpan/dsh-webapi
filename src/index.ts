@@ -5,7 +5,6 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { readFileSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -21,39 +20,39 @@ import { registerFsRoutes } from './fs.js'
 import { registerSkillRoutes } from './skills.js'
 import { registerUserQuestionBridge } from './user-questions.js'
 import { registerOpenApiRoutes } from './openapi.js'
+import { ApiKeyStore } from './api-keys-store.js'
+import { registerApiKeyRoutes } from './api-keys.js'
+import { pluginVersion } from './version.js'
+import { checkForUpdate } from './updates.js'
 import type { WebServiceConfig } from './types.js'
 
 
 export const name = '@dsh-external/dsh-web-service'
 export const inject = ['webServer', 'tools']
 
-/** 插件版本：直接读包内 package.json（lib/ 的上一级），避免与发布版本脱节。 */
-const pluginVersion: string = (() => {
-  try {
-    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-    return typeof pkg.version === 'string' ? pkg.version : '0.0.0'
-  } catch {
-    return '0.0.0'
-  }
-})()
-
 export interface Config extends WebServiceConfig {}
 
 export const Config: z<Config> = z.object({
   pathPrefix: z.string().default('/api/v1').description('Web Service API 路由前缀'),
-  apiKey: z.string().default('').description('三方调用鉴权 API Key（留空则不开启鉴权）'),
+  apiKey: z.string().default('').role('secret').description('三方调用鉴权 API Key（留空则不开启鉴权）'),
   standalonePort: z.natural().default(0).description('独立 HTTP 监听端口（0 表示仅使用主 webserver）'),
   cors: z.boolean().default(true).description('是否允许跨域请求'),
   defaultCwd: z.string().default('').description('默认工作目录（留空则为 process.cwd()）'),
   maxUploadBytes: z.natural().default(2 * 1024 * 1024 * 1024).description('文件上传大小上限（字节，默认 2GB；大文件建议走 /files/resumable 分片接口）'),
+  adminRemoteAccess: z.boolean().default(false).description('是否允许非回环地址访问 API Key 管理接口（默认 false，仅本机可管理密钥）'),
 })
 
 export function apply(ctx: Context, config: Config): void {
   const router = new HttpRouter(config)
   const prefix = config.pathPrefix || '/api/v1'
 
+  // 0. API Key 存储 + 多 Key 鉴权服务（数据面鉴权由 router 委托给它）
+  const keyStore = new ApiKeyStore(config.apiKey || '', config.dshHome)
+  router.setAuthService(keyStore)
+
   // 1. 系统状态接口
-  router.get('/system/status', (_req: IncomingMessage, res: ServerResponse) => {
+  router.get('/system/status', async (_req: IncomingMessage, res: ServerResponse) => {
+    await keyStore.ensureReady()
     const webServer = ctx.get('webServer') as any
     const llm = ctx.get('llm') as any
     const workspaceRegistry = ctx.get('workspaceRegistry') as any
@@ -69,11 +68,19 @@ export function apply(ctx: Context, config: Config): void {
         prefix,
         workspacesCount: workspaceRegistry?.list?.()?.length ?? 0,
         providers: llm?.listProviders?.()?.map((p: any) => p.id) ?? [],
-        authEnabled: Boolean(config.apiKey),
+        authEnabled: keyStore.getAuthEnabled(),
+        apiKeyCount: keyStore.countActive(),
+        keysStoreDegraded: keyStore.degraded,
         uptime: process.uptime(),
       },
     })
   })
+
+  // 1.1 检查更新（公开：只暴露当前版本号与 GitHub Release 信息；内部带缓存与超时降级）
+  router.get('/system/updates', async (_req: IncomingMessage, res: ServerResponse) => {
+    const result = await checkForUpdate(pluginVersion)
+    sendJson(res, 200, { ok: true, data: result })
+  }, { auth: 'public' })
 
   // 2. 注册各子业务模块路由
   registerWorkspaceRoutes(ctx, router)
@@ -85,6 +92,7 @@ export function apply(ctx: Context, config: Config): void {
   registerSkillRoutes(ctx, router, config)
   registerUserQuestionBridge(ctx, router)
   registerOpenApiRoutes(router, config)
+  registerApiKeyRoutes(router, config, keyStore)
 
   // 3. 挂载到 DSH 主 Web 服务器 (ctx.webServer)
   ctx.effect(() => {
@@ -137,14 +145,20 @@ export function apply(ctx: Context, config: Config): void {
         render: (_args: unknown, value: unknown) => [{ type: 'text', text: String(value) }],
       },
       async execute() {
+        await keyStore.ensureReady()
         const webServer = ctx.get('webServer') as any
         const mainPort = webServer?.port || 3080
         const info = {
           baseUrl: `http://127.0.0.1:${mainPort}${prefix}`,
           docsUrl: `http://127.0.0.1:${mainPort}${prefix}/docs`,
+          apiReferenceUrl: `http://127.0.0.1:${mainPort}${prefix}/docs/reference`,
+          apiKeysSettingsUrl: `http://127.0.0.1:${mainPort}${prefix}/settings/api-keys`,
           openApiUrl: `http://127.0.0.1:${mainPort}${prefix}/openapi.json`,
           standalonePort: config.standalonePort || undefined,
-          apiKeyConfigured: Boolean(config.apiKey),
+          authEnabled: keyStore.getAuthEnabled(),
+          apiKeyConfigured: keyStore.getAuthEnabled(),
+          apiKeyCount: keyStore.countActive(),
+          adminTokenPath: keyStore.adminTokenPath,
         }
         return JSON.stringify(info, null, 2)
       },

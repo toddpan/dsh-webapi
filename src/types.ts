@@ -156,6 +156,11 @@ export interface WebServiceConfig {
   defaultCwd?: string
   /** 文件上传大小上限（字节），默认 100MB */
   maxUploadBytes?: number
+  /**
+   * 是否允许非回环地址访问 API Key 管理接口（/api-keys*），默认 false。
+   * 默认仅允许本机（回环）管理密钥；确需远程管理时显式开启。
+   */
+  adminRemoteAccess?: boolean
   /** 技能管理：额外自定义技能根目录（root=custom 时使用） */
   customSkillDirs?: string[]
   /** 技能管理：DSH 配置根（默认 $DSH_HOME 或 ~/.dsh） */

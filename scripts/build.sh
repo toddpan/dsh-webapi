@@ -74,4 +74,6 @@ echo "=== Cleaning lib ==="
 rm -rf lib
 echo "=== Compiling src → lib ==="
 "$TSC" -p tsconfig.json
+echo "=== Copying browser half (client/client.js → lib/client.js) ==="
+cp client/client.js lib/client.js
 echo "=== Build complete ==="
