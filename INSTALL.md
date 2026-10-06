@@ -79,3 +79,18 @@ curl -s http://127.0.0.1:3080/api/v1/openapi.json | head -c 100
 
 启动日志无 `Cannot find package '@dsh-external/dsh-web-service'`、
 无 `invalid config`、无路由注册报错，即挂载成功。
+
+### 插件清单里显示「未运行」怎么办
+
+「未运行」（inventory 的 `unobserved`）表示该条目存在于装配层、但**从未激活**，通常是入口模块
+加载失败——最常见的是包里缺 `lib/`（构建产物未随包一起安装）。排查顺序：
+
+```bash
+# 1. 包内是否有入口文件与构建产物
+ls "$DSH_HOME/profiles/<profile>/node_modules/@dsh-external/dsh-web-service/lib/index.js"
+
+# 2. 直接复现加载错误（报 ERR_MODULE_NOT_FOUND 即为缺文件）
+node -e "import('@dsh-external/dsh-web-service')" --input-type=module
+```
+
+确认包完整后，**失败的条目不会被自动重试**：在插件管理器里把该条目关掉再打开，或重启 DSH。

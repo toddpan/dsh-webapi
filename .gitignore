@@ -1,5 +1,6 @@
 node_modules/
-lib/
+# lib/ is committed on purpose: the plugin manager's "GitHub repository" install
+# fetches the repo as-is, so the built entry point must be present in git.
 *.tsbuildinfo
 *.tgz
 *.bak-*

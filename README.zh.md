@@ -36,7 +36,16 @@ curl -sI http://127.0.0.1:3080/api/v1/docs           # HTTP/1.1 200 OK
 > 但包管理器可能复用该 URL 的旧解析结果。要把已有安装切到确定版本，用带版本号的资产：
 > `dsh plugin --profile web add https://github.com/toddpan/dsh-webapi/releases/download/v0.1.11/dsh-web-service-0.1.11.tgz`
 
-**方式二：从源码构建**（需要一份 DSH 源码 checkout）
+**方式二：直接从 git 仓库安装**（插件管理器的「GitHub 仓库地址」安装方式）
+
+```bash
+dsh plugin --profile web add github:toddpan/dsh-webapi
+```
+
+`lib/` 已入库，所以从 git 装的包可直接运行。`lib/` 与 `src/` 保持同步——改动 `src/` 后，
+请在同一次改动里重新构建并提交 `lib/`。
+
+**方式三：从源码构建**（需要一份 DSH 源码 checkout）
 
 ```bash
 git clone https://github.com/toddpan/dsh-webapi && cd dsh-webapi
@@ -44,7 +53,6 @@ DSH_CHECKOUT=/path/to/deepseek-harness bash scripts/build.sh     # src/ → lib/
 dsh plugin --profile web add "$PWD"
 ```
 
-`lib/` 是构建产物、不入库，**所以从 git 直接安装拿不到可运行代码**——请用方式一，或先自行构建。
 `scripts/build.sh` 会从 checkout 软链 `cordis` / `schemastery` / `@deepseek-ai/*` 等 peer，无需 `npm install`。
 
 ## 配置

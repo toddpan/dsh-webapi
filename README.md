@@ -39,7 +39,16 @@ curl -sI http://127.0.0.1:3080/api/v1/docs           # HTTP/1.1 200 OK
 > resolution of that URL. To move an existing install to a known build, pin the versioned asset:
 > `dsh plugin --profile web add https://github.com/toddpan/dsh-webapi/releases/download/v0.1.11/dsh-web-service-0.1.11.tgz`
 
-**Option 2: build from source** (needs a DSH source checkout)
+**Option 2: install straight from the git repo** (the "GitHub repository" install in the plugin manager)
+
+```bash
+dsh plugin --profile web add github:toddpan/dsh-webapi
+```
+
+`lib/` is committed, so a git install is directly runnable. It is kept in sync with `src/`; after
+changing `src/`, rebuild and commit `lib/` in the same change.
+
+**Option 3: build from source** (needs a DSH source checkout)
 
 ```bash
 git clone https://github.com/toddpan/dsh-webapi && cd dsh-webapi
@@ -47,9 +56,8 @@ DSH_CHECKOUT=/path/to/deepseek-harness bash scripts/build.sh     # src/ → lib/
 dsh plugin --profile web add "$PWD"
 ```
 
-`lib/` is build output and is not committed, **so installing straight from git yields no runnable
-code** — use option 1, or build first. `scripts/build.sh` symlinks `cordis` / `schemastery` /
-`@deepseek-ai/*` peers out of the checkout, so no `npm install` is needed.
+`scripts/build.sh` symlinks `cordis` / `schemastery` / `@deepseek-ai/*` peers out of the checkout,
+so no `npm install` is needed.
 
 ## Configuration
 
