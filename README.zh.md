@@ -15,7 +15,7 @@ REST 接口与 SSE 流，再加一个 OpenAI 兼容的 `/chat/completions`，现
 
 ## 安装
 
-兼容 DSH `0.1.0`–`0.1.9`（peer 范围见 `package.json`，已在 `0.1.7-rc.2` 上运行验证）。
+兼容 DSH `0.1.0`–`0.2.x`（peer 范围见 `package.json`；已在 `0.1.7-rc.2` 上运行验证，并在 `0.2.0-rc.2` 上通过类型检查与运行时装配验证）。
 
 **方式一：预构建 tarball（推荐，免构建、免 `allowBuilds` 授权）**
 

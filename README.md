@@ -17,7 +17,7 @@ an agent, a non-DSH agent that calls DSH as a tool, or a gateway that puts DSH b
 
 ## Install
 
-Requires DSH `0.1.0`–`0.1.9` (peer ranges in `package.json`; verified on `0.1.7-rc.2`).
+Requires DSH `0.1.0`–`0.2.x` (peer ranges in `package.json`; verified on `0.1.7-rc.2`, and type-checked plus assembly-verified on `0.2.0-rc.2`).
 
 **Option 1: prebuilt tarball (recommended — no build step, no `allowBuilds` approval)**
 
