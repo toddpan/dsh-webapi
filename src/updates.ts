@@ -86,8 +86,10 @@ export async function checkForUpdate(current: string): Promise<UpdateCheckResult
     }
     if (!resp.ok) throw new Error('GitHub API 返回 HTTP ' + resp.status)
     const body: any = await resp.json()
-    const latest: string = typeof body?.tag_name === 'string' ? body.tag_name : ''
-    if (!latest) throw new Error('响应缺少 tag_name')
+    const rawTag: string = typeof body?.tag_name === 'string' ? body.tag_name : ''
+    if (!rawTag) throw new Error('响应缺少 tag_name')
+    // 归一化 tag 前缀（v0.1.11 → 0.1.11），调用方展示时再统一补 v，避免出现「vv0.1.11」
+    const latest = rawTag.replace(/^v/i, '')
     const data: UpdateCheckResult = {
       ...base,
       latest,

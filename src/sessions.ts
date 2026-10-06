@@ -520,9 +520,19 @@ export function registerSessionRoutes(ctx: Context, router: any, config: WebServ
         }
       }
 
+      // 建会话即设定运行权限（原生 permissionPresets；失败不影响会话创建）
+      let permission: SessionPermissionView | undefined
+      if (body.permission && String(body.permission).trim()) {
+        try {
+          const r = await applySessionPermission(ctx, createdSessionId, String(body.permission).trim())
+          if (!('error' in r)) permission = r
+        } catch { /* ignore */ }
+      }
+
       sendJson(res, 201, {
         ok: true,
         data: {
+          permission,
           sessionId: createdSessionId,
           title: body.title || 'Untitled Session',
           workspaceId: body.workspaceId,
@@ -806,6 +816,31 @@ export function registerSessionRoutes(ctx: Context, router: any, config: WebServ
     }
   })
 
+  // 6b. 运行权限（沙箱模式 + 审批策略）：走 harness 原生 permissionPresets 服务，
+  //     与 `/permission <preset>` 命令同一写路径（session 事件 permission/preset + sandbox/mode + approval/policy），
+  //     对远端执行会话真实生效，而不是靠提示词文字约定。
+  router.get('/sessions/:id/permission', async (_req: IncomingMessage, res: ServerResponse, params: Record<string, string>) => {
+    try {
+      const r = await readSessionPermission(ctx, params.id)
+      if ('error' in r) { sendJson(res, r.status, { ok: false, error: r.error, code: r.code }); return }
+      sendJson(res, 200, { ok: true, data: r })
+    } catch (err: any) {
+      sendJson(res, 500, { ok: false, error: err?.message || String(err) })
+    }
+  })
+
+  router.put('/sessions/:id/permission', async (_req: IncomingMessage, res: ServerResponse, params: Record<string, string>, _query: any, body: { preset?: string }) => {
+    try {
+      const preset = String(body?.preset || '').trim()
+      if (!preset) { sendJson(res, 400, { ok: false, error: 'preset is required', code: 'BAD_REQUEST' }); return }
+      const r = await applySessionPermission(ctx, params.id, preset)
+      if ('error' in r) { sendJson(res, r.status, { ok: false, error: r.error, code: r.code }); return }
+      sendJson(res, 200, { ok: true, data: r })
+    } catch (err: any) {
+      sendJson(res, 500, { ok: false, error: err?.message || String(err) })
+    }
+  })
+
   // 7. 取消当前轮次执行
   router.post('/sessions/:id/cancel', async (_req: IncomingMessage, res: ServerResponse, params: Record<string, string>) => {
     try {
@@ -829,4 +864,91 @@ export function registerSessionRoutes(ctx: Context, router: any, config: WebServ
       sendJson(res, 500, { ok: false, error: err.message })
     }
   })
+}
+
+// ---------------- 运行权限（sandbox mode + approval policy） ----------------
+
+type PermFail = { error: string; status: number; code: string }
+export interface SessionPermissionView {
+  sessionId: string
+  /** 当前生效 preset（与 `/permission` 命令同口径；不匹配任何 preset 时为 custom） */
+  preset: string
+  /** 当前沙箱模式：read-only / workspace-write / danger-full-access */
+  sandbox?: string
+  /** 当前审批策略：ask / never 等 */
+  approval?: string
+  /** 可切换的 preset 名 */
+  available: string[]
+}
+
+/** 常见别名 → harness preset 名（ask = 写工作区 + 需审批） */
+const PRESET_ALIASES: Record<string, string> = {
+  ask: 'workspace-write',
+  'full-access': 'danger-full-access',
+  full: 'danger-full-access',
+}
+
+async function resolvePermissionTarget(ctx: Context, sessionId: string): Promise<{ agent: any; presets: any } | PermFail> {
+  const presets = ctx.get('permissionPresets') as any
+  if (!presets || typeof presets.apply !== 'function') {
+    return { error: 'permissionPresets service unavailable on this DSH node', status: 501, code: 'NOT_SUPPORTED' }
+  }
+  const sessionController = ctx.get('sessionController') as any
+  let agent: any
+  if (sessionController && typeof sessionController.resolveAgent === 'function') {
+    const found = await sessionController.resolveAgent(sessionId)
+    if (found && 'error' in found) return { error: String(found.error?.message || found.error), status: 404, code: 'SESSION_NOT_FOUND' }
+    agent = found?.agent || found
+  } else {
+    const agentsService = ctx.get('agents') as any
+    agent = agentsService?.get ? agentsService.get(sessionId) : undefined
+  }
+  if (!agent?.session) return { error: `session '${sessionId}' is not active`, status: 404, code: 'SESSION_NOT_FOUND' }
+  return { agent, presets }
+}
+
+function permissionView(sessionId: string, agent: any, presets: any): SessionPermissionView {
+  let sandbox: string | undefined
+  let approval: string | undefined
+  try {
+    const st = presets.permissionState?.(agent.session)
+    sandbox = st?.sandbox ?? undefined
+    approval = st?.approval ?? undefined
+  } catch { /* 视图字段尽力而为 */ }
+  return {
+    sessionId,
+    preset: String(presets.current(agent.session)),
+    sandbox,
+    approval,
+    available: Array.isArray(presets.names) ? [...presets.names] : [],
+  }
+}
+
+export async function readSessionPermission(ctx: Context, sessionId: string): Promise<SessionPermissionView | PermFail> {
+  const t = await resolvePermissionTarget(ctx, sessionId)
+  if ('error' in t) return t
+  return permissionView(sessionId, t.agent, t.presets)
+}
+
+/**
+ * 切换会话运行权限：与 `/permission <preset>` 命令完全同一写路径——
+ * presets.apply 记录 permission/preset 并按需写 sandbox/mode；审批策略经 approval.setPolicy
+ * 切换（会向下一步注入一条「策略已变更」消息，与 GUI 切换行为一致）。
+ */
+export async function applySessionPermission(ctx: Context, sessionId: string, rawPreset: string): Promise<SessionPermissionView | PermFail> {
+  const t = await resolvePermissionTarget(ctx, sessionId)
+  if ('error' in t) return t
+  const { agent, presets } = t
+  const name = PRESET_ALIASES[rawPreset] ?? rawPreset
+  const names: string[] = Array.isArray(presets.names) ? presets.names : []
+  if (names.length && !names.includes(name)) {
+    return { error: `unknown preset "${rawPreset}" (available: ${names.join(', ')})`, status: 400, code: 'UNKNOWN_PRESET' }
+  }
+  const approvalService = ctx.get('approval') as any
+  if (approvalService && typeof approvalService.setPolicy === 'function') {
+    presets.apply(agent.session, name, (policy: string) => approvalService.setPolicy(agent, policy))
+  } else {
+    presets.set(agent.session, name)
+  }
+  return permissionView(sessionId, agent, presets)
 }

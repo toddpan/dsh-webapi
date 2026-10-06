@@ -22,6 +22,7 @@
 
 import { createHash } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import vm from 'node:vm'
@@ -30,6 +31,7 @@ const BASE = process.env.DSH_WEB_URL || 'http://127.0.0.1:3080'
 const P = process.env.DSH_WEB_PREFIX || '/api/v1'
 const DSH_HOME = process.env.DSH_HOME || path.join(homedir(), '.dsh')
 const TOKEN_FILE = path.join(DSH_HOME, 'dsh-web-service', 'admin-token')
+const pkgVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
 const STORE_FILE = path.join(DSH_HOME, 'dsh-web-service', 'api-keys.json')
 const SKIP_AUTH = process.env.VERIFY_SKIP_AUTH === '1'
 
@@ -82,7 +84,7 @@ try {
   // ==================== 0. 装载确认 ====================
   section('0. 插件装载确认')
   let r = await req('GET', `${P}/system/status`)
-  check('运行中的插件已是 0.3.0（新代码被 DSH 装载）', r.body?.data?.version === '0.3.0', `version=${r.body?.data?.version}`)
+  check('运行中的插件版本与 package.json 一致（新代码被 DSH 装载）', r.body?.data?.version === pkgVersion, `version=${r.body?.data?.version} 期望=${pkgVersion}`)
   check('/system/status 上报 apiKeyCount', typeof r.body?.data?.apiKeyCount === 'number', `apiKeyCount=${r.body?.data?.apiKeyCount}`)
   check('/system/status 上报 keysStoreDegraded', r.body?.data?.keysStoreDegraded === false, `degraded=${r.body?.data?.keysStoreDegraded}`)
   check('初始鉴权未开启', r.body?.data?.authEnabled === false)

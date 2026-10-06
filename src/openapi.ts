@@ -204,6 +204,31 @@ function generateOpenApiSpec(prefix: string) {
           responses: { 200: { description: '删除/归档成功' } },
         },
       },
+      '/sessions/{id}/permission': {
+        get: {
+          summary: '查询会话运行权限 (sandbox + approval preset)',
+          tags: ['Sessions'],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { 200: { description: '{ preset, sandbox, approval, available[] }' }, 501: { description: '节点未装载 permissionPresets' } },
+        },
+        put: {
+          summary: '切换会话运行权限（等价 /permission 命令，原生生效）',
+          tags: ['Sessions'],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['preset'],
+                  properties: { preset: { type: 'string', description: 'danger-full-access / workspace-write（ask 为 workspace-write 别名）' } },
+                },
+              },
+            },
+          },
+          responses: { 200: { description: '切换后的权限视图' }, 400: { description: '未知 preset' } },
+        },
+      },
       '/sessions/{id}/history': {
         get: {
           summary: '查询会话历史消息 (分页)',

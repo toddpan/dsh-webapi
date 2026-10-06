@@ -56,6 +56,8 @@ export interface SessionCreateInput {
   reasoningEffort?: string
   agentPreset?: string
   sessionId?: string
+  /** 运行权限 preset（danger-full-access / workspace-write …），建会话后经 permissionPresets 原生生效 */
+  permission?: string
 }
 
 export interface SessionUpdateInput {
