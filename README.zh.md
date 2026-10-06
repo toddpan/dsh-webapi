@@ -135,8 +135,13 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
 
 **安全约定**
 
-- 完整 Key **只在新建/轮换成功的一次性弹层里出现一次**，之后页面只显示前缀 + 掩码，无法找回；
-  落盘只存 `sha256(明文)`，明文永不写入磁盘、日志或错误信息。
+- 落盘只存两项：`sha256(明文)`（鉴权用）和一份**可逆密文** `sealed`（列表页「复制」用）。
+  `sealed` 是用**管理令牌经 HKDF 派生的密钥**做的 AES-256-GCM；因此 `api-keys.json` 单独泄露
+  （备份、截图、贴到 issue）还原不出 Key，还需要同目录下 0600 的 `admin-token`。
+- 列表页每条 Key 都有「复制」按钮，**明文通过管理令牌鉴权的接口现取现用**，只写进剪贴板，
+  不进 DOM、不写 localStorage、不打日志。
+- 加密存储上线**之前**创建的 Key 只有哈希，明文不可恢复 —— 点「复制」会直接引导到「轮换」生成新 Key；
+  管理令牌被删除重建后，旧密文的解密封装也随之失效，同样表现为「不可复制，请轮换」（不会静默给错值）。
 - 管理接口默认**只允许本机（回环）访问**；远程管理需显式设置 `adminRemoteAccess: true`。
   浏览器请求一律做同源校验（防 CSRF / DNS rebinding），跨源返回 `403 FORBIDDEN_ORIGIN`。
 - 吊销立即生效且不可恢复；轮换会让旧 Key 立即失效——更稳妥的做法是先「新建」替代 Key 分发，
@@ -171,7 +176,7 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
 7. **交互式会话**：读取挂起的 `ask_user_question` 问题并经 REST 作答、中止正在跑的轮次、
    上传/列出/下载工作区文件（含分片续传上传）。
 8. **API Key 设置页与密钥管理**：`GET /api/v1/settings/api-keys` 一页管理三方调用密钥——
-   多 Key 并存可命名、脱敏展示、新建/轮换/吊销、开启关闭鉴权；明文只显示一次，落盘只存哈希。
+   多 Key 并存可命名、脱敏展示、新建/轮换/吊销、列表一键复制、开启关闭鉴权；落盘存哈希 + 管理令牌加密的密文。
 
 ## API 路由汇总
 
@@ -214,9 +219,10 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
 | | `PATCH` | `/settings/:namespace` | 更新指定命名空间配置 |
 | **API Keys** | `GET` | `/settings/api-keys` | **API Key 设置页**（HTML，公开；数据接口需 Admin Token） |
 | | `GET` | `/api-keys` | 列出 API Key（脱敏，不含明文/哈希） |
-| | `POST` | `/api-keys` | 新建 API Key（明文仅返回一次） |
+| | `POST` | `/api-keys` | 新建 API Key（返回明文，之后可随时复制） |
 | | `PATCH` | `/api-keys/:id` | 修改名称 / 备注 / 过期时间 |
-| | `POST` | `/api-keys/:id/rotate` | 轮换（旧 Key 立即失效，新 Key 明文仅一次） |
+| | `POST` | `/api-keys/:id/rotate` | 轮换（旧 Key 立即失效，新 Key 可随时复制） |
+| | `POST` | `/api-keys/:id/reveal` | 取回明文用于复制（需管理令牌；历史 Key 返回 409） |
 | | `POST` | `/api-keys/:id/revoke` | 吊销（幂等，不可恢复） |
 | | `DELETE` | `/api-keys/:id` | 删除记录（仅限已吊销的 Key） |
 | | `GET` | `/api-keys/auth` | 查询鉴权状态 |

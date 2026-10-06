@@ -7,7 +7,8 @@
  * 安全约定：
  * - 页面 HTML 本身不含任何密钥，公开可访问（与 /docs 一致）；
  * - 所有数据请求都走 /api-keys*，服务端要求管理令牌；页面只把令牌存在 localStorage；
- * - 完整 Key 只在「新建 / 轮换」成功的一次性弹层内出现，关闭即从 DOM 清除。
+ * - 新建 / 轮换成功后弹层展示完整 Key（关闭即从 DOM 清除）；列表页另有「复制」按钮，
+ *   通过管理令牌鉴权的 /api-keys/:id/reveal 现取现用，明文只进剪贴板、不落 DOM。
  */
 
 import { pluginVersion } from './version.js'
@@ -185,7 +186,7 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
           <div style="font-size:15px; margin-bottom:6px;">还没有任何 API Key</div>
           <ol>
             <li>点击右上角「新建 API Key」生成密钥</li>
-            <li>复制并保存到安全的地方（完整 Key 仅显示一次）</li>
+            <li>复制并保存到安全的地方（之后也可在列表里随时复制）</li>
             <li>在客户端请求头里带上 <code class="inline">Authorization: Bearer &lt;key&gt;</code></li>
           </ol>
           <button class="btn" onclick="openCreate()">生成第一条 Key</button>
@@ -203,7 +204,7 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
           <button class="btn btn-ghost btn-sm" onclick="copyCurl()">复制 curl 示例</button>
         </div>
         <p class="muted" style="margin-top:14px;">
-          密钥生成后仅显示一次；本页面之后只展示脱敏信息，<strong>无法查看或找回完整 Key</strong>。
+          密钥明文在列表里可随时复制；管理接口只返回脱敏信息（不含哈希与明文），复制走单独的管理令牌鉴权接口。
           若密钥泄露，请立即吊销或轮换。
         </p>
         <p class="muted" style="margin-top:10px;">
@@ -267,7 +268,7 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
     <div class="modal-head" id="dlgRevealTitle">请立即保存完整 Key</div>
     <div class="modal-body">
       <div class="alert alert-warn" style="margin-bottom:14px;">
-        <div id="revealHint"><strong>完整 Key 仅显示这一次</strong>关闭后本页面只保留脱敏信息，无法找回。</div>
+        <div id="revealHint"><strong>完整 Key</strong>关闭后列表里仍可随时「复制」，但请尽快存到安全的地方。</div>
       </div>
       <div class="reveal-box" id="revealBox" tabindex="0" aria-label="完整 API Key"></div>
       <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
@@ -308,7 +309,7 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
       <div class="alert alert-warn">
         <div>
           <strong>旧 Key 将立即失效</strong>
-          所有正在使用该 Key 的客户端会同时收到 401。新 Key 仅显示一次。
+          所有正在使用该 Key 的客户端会同时收到 401。新 Key 可在列表里复制。
         </div>
       </div>
       <p class="muted">
@@ -601,6 +602,13 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
 
         const actions = [];
         if (k.source !== 'config' && !revoked) {
+          actions.push(
+            '<button class="btn btn-ghost btn-sm" data-act="copy"' +
+              (k.recoverable
+                ? ' title="复制完整 Key"'
+                : ' data-norecover="1" title="明文不可恢复（创建于加密存储启用之前），请用轮换生成新 Key"') +
+              '>复制</button>',
+          );
           actions.push('<button class="btn btn-ghost btn-sm" data-act="rename">重命名</button>');
           actions.push('<button class="btn btn-ghost btn-sm" data-act="rotate">轮换</button>');
           actions.push('<button class="btn btn-danger btn-sm" data-act="revoke">吊销</button>');
@@ -613,7 +621,7 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
           '<td data-label="名称"><div>' + esc(k.name) + '</div>' +
             (k.note ? '<div class="muted">' + esc(k.note) + '</div>' : '') + '</td>' +
           '<td data-label="密钥"><span class="key-masked">' + esc(k.masked) + '</span>' +
-            '<div class="muted">' + esc(k.prefix) + '…</div></td>' +
+            (k.prefix ? '<div class="muted">' + esc(k.prefix) + '&hellip;</div>' : '') + '</td>' +
           '<td data-label="创建时间" class="muted">' + fmtTime(k.createdAt) + '</td>' +
           '<td data-label="最近使用" class="muted">' + (k.lastUsedAt ? fmtTime(k.lastUsedAt) : '从未') + '</td>' +
           '<td data-label="状态">' + badge + '</td>' +
@@ -634,7 +642,72 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
       else if (act === 'rotate') openRotate(id);
       else if (act === 'revoke') openRevoke(id);
       else if (act === 'del') openDelete(id);
+      else if (act === 'copy') copyExisting(btn, id);
     });
+
+    // ---------- 复制已创建的 Key ----------
+    /**
+     * 剪贴板写入：优先 Clipboard API，失败回退到临时 textarea。
+     * 页面常被嵌进 GUI 侧边栏的同源 iframe，权限策略可能拒绝 clipboard.writeText。
+     */
+    async function writeClipboard(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return;
+        } catch (e) { /* 落到下面的回退 */ }
+      }
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      if (!ok) throw new Error('浏览器拒绝了剪贴板写入');
+    }
+
+    /**
+     * 复制历史 Key：向 reveal 接口取回明文后**直接写入剪贴板**。
+     * 明文只存在于本次调用的局部变量，不进 DOM、不写 localStorage、不做 console 输出。
+     * 历史记录（加密存储上线前创建）拿不到明文，直接引导到「轮换」。
+     */
+    async function copyExisting(btn, id) {
+      if (!requireAuth()) return;
+      const rec = KEY_CACHE.find(function (x) { return x.id === id; });
+      if (rec && !rec.recoverable) {
+        toast('这条 Key 创建于加密存储启用之前，明文已不可恢复；请用「轮换」生成新 Key。');
+        openRotate(id);
+        return;
+      }
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '读取中…';
+      let plaintext = '';
+      try {
+        const r = await api('/api-keys/' + encodeURIComponent(id) + '/reveal', { method: 'POST' });
+        if (isAuthFail(r)) return;
+        if (r.status !== 200 || !r.body || !r.body.ok) {
+          toast((r.body && r.body.error) || ('复制失败：HTTP ' + r.status));
+          if (r.body && r.body.code === 'KEY_NOT_RECOVERABLE') openRotate(id);
+          return;
+        }
+        plaintext = r.body.data.plaintext;
+        await writeClipboard(plaintext);
+        toast('已复制到剪贴板' + (rec ? '：' + rec.name : ''));
+        if (rec) rec.recoverable = true;
+      } catch (e) {
+        toast('复制失败：' + ((e && e.message) || '未知错误'));
+      } finally {
+        plaintext = '';
+        btn.disabled = false;
+        btn.textContent = label;
+      }
+    }
 
     // ---------- 新建 ----------
     function onKeyModeChange() {

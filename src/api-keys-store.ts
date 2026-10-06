@@ -13,7 +13,7 @@
  * - **fail-closed**：存储损坏 / 尚未初始化完成时一律视为需要鉴权，绝不放松。
  */
 
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { chmod, copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -36,6 +36,12 @@ export interface ApiKeyRecord {
   prefix: string
   /** sha256(明文) 的 hex；config 来源固定为空串（不落派生物） */
   hash: string
+  /**
+   * 明文的可逆密文（AES-256-GCM，密钥由管理令牌 HKDF 派生），仅 managed key 有值。
+   * 用于列表页「复制」；缺失表示明文不可恢复（加密存储上线前的历史记录）。
+   * 绝不返回给任何视图层，只在 reveal() 内部解开。
+   */
+  sealed?: string
   /** 哈希算法位，为将来升级留迁移余地 */
   algo: 'sha256'
   createdAt: number
@@ -70,6 +76,11 @@ export interface ApiKeyView {
   readOnly: boolean
   /** true = 自定义 Key 值（非随机生成），页面需提示熵风险 */
   custom: boolean
+  /**
+   * true = 该记录持有可解密的密文，列表页可提供「复制」。
+   * 历史记录（加密存储上线前创建）为 false，只能「轮换」。
+   */
+  recoverable: boolean
 }
 
 /** 输入层错误（重复 Key、非法值等）：路由层应映射为 400，而不是 503 */
@@ -127,6 +138,60 @@ function hashPlaintext(plaintext: string): string {
   return createHash('sha256').update(plaintext, 'utf8').digest('hex')
 }
 
+// ==================== 可复制密钥的封装（sealed） ====================
+//
+// 默认设计是只落 sha256，明文只在「新建 / 轮换」那一次出现——安全，但历史 Key 再也拿不回来。
+// 为了让列表能「复制」，managed key 额外落一份**可逆密文**：
+//
+//   派生密钥 = HKDF-SHA256(ikm = 管理令牌, salt = 固定, info = 固定, 32 字节)
+//   密文     = base64url( iv(12) || authTag(16) || AES-256-GCM(plaintext) )
+//
+// 这样 api-keys.json 单独泄露（备份、截图、贴到 issue）不足以还原 Key —— 还需要同目录下
+// 0600 的 admin-token。反过来，管理令牌被删除重建后旧密文即失效，表现为「不可复制，请轮换」，
+// 不会静默给错值。
+
+const SEAL_SALT = 'dsh-web-service/api-key-seal'
+const SEAL_INFO = 'dsh-web-service/api-key-seal/v1'
+const SEAL_IV_BYTES = 12
+const SEAL_TAG_BYTES = 16
+/** base64url 形态校验：iv + tag + 至少 1 字节密文 */
+const SEALED_RE = /^[A-Za-z0-9_-]{40,8192}$/
+
+function deriveSealKey(adminToken: string): Buffer {
+  return Buffer.from(
+    hkdfSync(
+      'sha256',
+      Buffer.from(adminToken, 'utf8'),
+      Buffer.from(SEAL_SALT, 'utf8'),
+      Buffer.from(SEAL_INFO, 'utf8'),
+      32,
+    ),
+  )
+}
+
+function sealPlaintext(key: Buffer, plaintext: string): string {
+  const iv = randomBytes(SEAL_IV_BYTES)
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  const body = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+  return Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64url')
+}
+
+/** 解密失败（令牌被重建 / 密文被改）一律返回 null，由调用方降级为「不可复制」 */
+function unsealPlaintext(key: Buffer, sealed: string): string | null {
+  try {
+    const buf = Buffer.from(sealed, 'base64url')
+    if (buf.length <= SEAL_IV_BYTES + SEAL_TAG_BYTES) return null
+    const iv = buf.subarray(0, SEAL_IV_BYTES)
+    const tag = buf.subarray(SEAL_IV_BYTES, SEAL_IV_BYTES + SEAL_TAG_BYTES)
+    const body = buf.subarray(SEAL_IV_BYTES + SEAL_TAG_BYTES)
+    const decipher = createDecipheriv('aes-256-gcm', key, iv)
+    decipher.setAuthTag(tag)
+    return Buffer.concat([decipher.update(body), decipher.final()]).toString('utf8')
+  } catch {
+    return null
+  }
+}
+
 /** 定长缓冲的常量时间比较；长度不等直接 false（长度本身不是秘密） */
 function safeEqualHex(aHex: string, bHex: string): boolean {
   if (aHex.length !== bHex.length) return false
@@ -175,6 +240,7 @@ export function toView(rec: ApiKeyRecord): ApiKeyView {
     source: rec.source,
     readOnly: isConfig,
     custom: rec.custom === true,
+    recoverable: !isConfig && typeof rec.sealed === 'string' && rec.sealed.length > 0,
   }
 }
 
@@ -195,6 +261,8 @@ export class ApiKeyStore {
   private initPromise: Promise<void> | null = null
   private initDone = false
   private adminTokenValue = ''
+  /** 由管理令牌派生的封装密钥（惰性计算并缓存） */
+  private sealKey: Buffer | null = null
   private lastUsedFlushAt = 0
 
   /** 读盘失败 / 文件损坏 / 初始化失败时为 true（fail-closed：一律要求鉴权） */
@@ -309,6 +377,8 @@ export class ApiKeyStore {
     if (typeof k.prefix !== 'string' || k.prefix.length > 32) return false
     if (typeof k.hash !== 'string') return false
     if (k.hash !== '' && !HASH_RE.test(k.hash)) return false
+    // sealed 只在 reveal() 内部解密，但仍收紧形态：非法值直接丢弃，避免脏数据进入内存
+    if (k.sealed !== undefined && (typeof k.sealed !== 'string' || !SEALED_RE.test(k.sealed))) return false
     return true
   }
 
@@ -384,6 +454,31 @@ export class ApiKeyStore {
   /** 供 CLI/文档提示使用：仅返回存放路径，绝不返回值 */
   get adminTokenPath(): string {
     return this.adminTokenFile
+  }
+
+  /** 封装密钥：需要管理令牌已就绪（init 中 ensureAdminToken 之后即可用） */
+  private sealKeyOrNull(): Buffer | null {
+    if (this.sealKey) return this.sealKey
+    if (!this.adminTokenValue) return null
+    this.sealKey = deriveSealKey(this.adminTokenValue)
+    return this.sealKey
+  }
+
+  /**
+   * 复制：返回某条记录的明文。
+   * - `{ plaintext }`：可复制；
+   * - `'unrecoverable'`：记录存在但明文不可恢复（历史记录 / 已吊销 / 密文失效）；
+   * - `null`：记录不存在，或来自插件配置（只读遗留记录）。
+   */
+  async reveal(id: string): Promise<{ plaintext: string } | 'unrecoverable' | null> {
+    await this.ensureReady()
+    const rec = this.records.find((r) => r.id === id)
+    if (!rec || rec.source === 'config') return null
+    if (this.effectiveStatus(rec, Date.now()) !== 'active') return 'unrecoverable'
+    const key = this.sealKeyOrNull()
+    if (!rec.sealed || !key) return 'unrecoverable'
+    const plaintext = unsealPlaintext(key, rec.sealed)
+    return plaintext === null ? 'unrecoverable' : { plaintext }
   }
 
   // ---------- 查询 ----------
@@ -528,6 +623,7 @@ export class ApiKeyStore {
           throw new ApiKeyInputError('该 Key 值已有一条有效记录，不能重复登记')
         }
       }
+      const sealKey = this.sealKeyOrNull()
       const rec: ApiKeyRecord = {
         id: 'ks_' + randomBytes(9).toString('base64url'),
         name: normalizeName(input.name, records.length + 1),
@@ -535,6 +631,8 @@ export class ApiKeyStore {
         // 自定义 Key 不展示任何明文片段（其熵由用户决定，前缀可能是大半价值）
         prefix: custom ? '' : plaintext.slice(0, DISPLAY_PREFIX_LEN),
         hash,
+        // 可逆密文：让列表页能「复制」这条 Key（详见文件顶部 sealed 说明）
+        sealed: sealKey ? sealPlaintext(sealKey, plaintext) : undefined,
         algo: 'sha256',
         createdAt: now,
         expiresAt: resolveExpires(input.expiresInDays),
@@ -571,12 +669,14 @@ export class ApiKeyStore {
     return this.mutate((records) => {
       const old = records.find((r) => r.id === id)
       if (!old || old.source === 'config') return null
+      const sealKey = this.sealKeyOrNull()
       const rec: ApiKeyRecord = {
         id: 'ks_' + randomBytes(9).toString('base64url'),
         name: old.name,
         note: old.note,
         prefix: plaintext.slice(0, DISPLAY_PREFIX_LEN),
         hash: hashPlaintext(plaintext),
+        sealed: sealKey ? sealPlaintext(sealKey, plaintext) : undefined,
         algo: 'sha256',
         createdAt: now,
         expiresAt: old.expiresAt,

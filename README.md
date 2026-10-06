@@ -144,9 +144,16 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
 
 **Security contract**
 
-- The full key is shown **exactly once**, in the one-shot dialog after create/rotate. Afterwards only
-  the prefix and a mask are shown; it cannot be recovered. Only `sha256(plaintext)` is persisted —
-  the plaintext never reaches disk, logs or error messages.
+- Two things are persisted per key: `sha256(plaintext)` (for authentication) and a **reversible**
+  `sealed` blob (for the list's "copy" button). `sealed` is AES-256-GCM under a key HKDF-derived from
+  the **admin token**, so `api-keys.json` alone (backup, screenshot, pasted into an issue) does not
+  reveal keys — the 0600 `admin-token` in the same directory is also required.
+- Every key in the list has a "copy" button: the plaintext is fetched on demand over an
+  admin-token-authenticated endpoint and written straight to the clipboard — never into the DOM,
+  localStorage, or logs.
+- Keys created **before** sealed storage shipped only have a hash and cannot be recovered; "copy"
+  guides you to "rotate" instead. Deleting/recreating the admin token invalidates old sealed blobs,
+  which likewise degrades to "not copyable" rather than silently returning a wrong value.
 - Admin endpoints accept **loopback clients only** by default. Remote key management requires
   `adminRemoteAccess: true`. Browser requests are same-origin checked (CSRF / DNS-rebinding);
   cross-origin gets `403 FORBIDDEN_ORIGIN`.
@@ -185,7 +192,7 @@ The store lives at `<DSH_HOME>/dsh-web-service/api-keys.json` (mode 0600).
    a running turn, upload/list/download workspace files (including resumable chunked upload).
 8. **API Key settings page** — `GET /api/v1/settings/api-keys` manages third-party access keys in one
    place: multiple named keys, masked display, create / rotate / revoke, and an auth on/off switch.
-   Plaintext is shown once; only hashes are persisted.
+   Hashes plus an admin-token-encrypted sealed copy are persisted.
 
 ## API routes
 
@@ -228,9 +235,10 @@ Default prefix: `/api/v1`
 | | `PATCH` | `/settings/:namespace` | Update one namespace |
 | **API Keys** | `GET` | `/settings/api-keys` | **API Key settings page** (HTML, public; data endpoints need the Admin Token) |
 | | `GET` | `/api-keys` | List API keys (masked; never returns plaintext or hashes) |
-| | `POST` | `/api-keys` | Create an API key (plaintext returned once) |
+| | `POST` | `/api-keys` | Create an API key (plaintext returned; copyable later) |
 | | `PATCH` | `/api-keys/:id` | Update name / note / expiry |
-| | `POST` | `/api-keys/:id/rotate` | Rotate (old key dies immediately; new plaintext returned once) |
+| | `POST` | `/api-keys/:id/rotate` | Rotate (old key dies immediately; new key copyable later) |
+| | `POST` | `/api-keys/:id/reveal` | Fetch the plaintext for copying (admin token; 409 for legacy keys) |
 | | `POST` | `/api-keys/:id/revoke` | Revoke (idempotent, irreversible) |
 | | `DELETE` | `/api-keys/:id` | Delete the record (revoked keys only) |
 | | `GET` | `/api-keys/auth` | Read auth status |

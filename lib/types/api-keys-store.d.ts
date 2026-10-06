@@ -27,6 +27,12 @@ export interface ApiKeyRecord {
     prefix: string;
     /** sha256(明文) 的 hex；config 来源固定为空串（不落派生物） */
     hash: string;
+    /**
+     * 明文的可逆密文（AES-256-GCM，密钥由管理令牌 HKDF 派生），仅 managed key 有值。
+     * 用于列表页「复制」；缺失表示明文不可恢复（加密存储上线前的历史记录）。
+     * 绝不返回给任何视图层，只在 reveal() 内部解开。
+     */
+    sealed?: string;
     /** 哈希算法位，为将来升级留迁移余地 */
     algo: 'sha256';
     createdAt: number;
@@ -60,6 +66,11 @@ export interface ApiKeyView {
     readOnly: boolean;
     /** true = 自定义 Key 值（非随机生成），页面需提示熵风险 */
     custom: boolean;
+    /**
+     * true = 该记录持有可解密的密文，列表页可提供「复制」。
+     * 历史记录（加密存储上线前创建）为 false，只能「轮换」。
+     */
+    recoverable: boolean;
 }
 /** 输入层错误（重复 Key、非法值等）：路由层应映射为 400，而不是 503 */
 export declare class ApiKeyInputError extends Error {
@@ -99,6 +110,8 @@ export declare class ApiKeyStore {
     private initPromise;
     private initDone;
     private adminTokenValue;
+    /** 由管理令牌派生的封装密钥（惰性计算并缓存） */
+    private sealKey;
     private lastUsedFlushAt;
     /** 读盘失败 / 文件损坏 / 初始化失败时为 true（fail-closed：一律要求鉴权） */
     degraded: boolean;
@@ -125,6 +138,17 @@ export declare class ApiKeyStore {
     ensureAdminToken(): Promise<string>;
     /** 供 CLI/文档提示使用：仅返回存放路径，绝不返回值 */
     get adminTokenPath(): string;
+    /** 封装密钥：需要管理令牌已就绪（init 中 ensureAdminToken 之后即可用） */
+    private sealKeyOrNull;
+    /**
+     * 复制：返回某条记录的明文。
+     * - `{ plaintext }`：可复制；
+     * - `'unrecoverable'`：记录存在但明文不可恢复（历史记录 / 已吊销 / 密文失效）；
+     * - `null`：记录不存在，或来自插件配置（只读遗留记录）。
+     */
+    reveal(id: string): Promise<{
+        plaintext: string;
+    } | 'unrecoverable' | null>;
     list(includeRevoked?: boolean): ApiKeyView[];
     get(id: string): ApiKeyRecord | undefined;
     countActive(): number;

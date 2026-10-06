@@ -4,9 +4,10 @@
  * 路由：
  *   页面      GET    {prefix}/settings/api-keys        （公开，与 /docs 一致）
  *   列表      GET    {prefix}/api-keys
- *   新建      POST   {prefix}/api-keys                 → 201，明文仅此一次
+ *   新建      POST   {prefix}/api-keys                 → 201，返回明文（之后可复制）
  *   改名/过期 PATCH  {prefix}/api-keys/:id
- *   轮换      POST   {prefix}/api-keys/:id/rotate      → 明文仅此一次
+ *   轮换      POST   {prefix}/api-keys/:id/rotate      → 返回明文（之后可复制）
+ *   复制      POST   {prefix}/api-keys/:id/reveal      → 取回明文（管理令牌；历史 Key 409）
  *   吊销      POST   {prefix}/api-keys/:id/revoke      （幂等）
  *   删除      DELETE {prefix}/api-keys/:id             （仅限已吊销的 managed Key）
  *   鉴权开关  GET    {prefix}/api-keys/auth
