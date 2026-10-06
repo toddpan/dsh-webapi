@@ -1,0 +1,4 @@
+swagger-ui-dist@5.33.1
+source: https://registry.npmmirror.com/swagger-ui-dist/-/swagger-ui-dist-5.33.1.tgz
+files: swagger-ui.css, swagger-ui-bundle.js
+license: Apache-2.0

@@ -73,6 +73,10 @@ curl -s http://127.0.0.1:3080/api/v1/system/status
 curl -sI http://127.0.0.1:3080/api/v1/docs | head -1        # HTTP/1.1 200 OK
 curl -s http://127.0.0.1:3080/api/v1/openapi.json | head -c 100
 
+# 3.1 Swagger UI 资产自托管可达（不依赖 CDN）
+curl -sI http://127.0.0.1:3080/api/v1/docs/assets/swagger-ui.css | head -1        # 200
+curl -sI http://127.0.0.1:3080/api/v1/docs/assets/swagger-ui-bundle.js | head -1  # 200
+
 # 4. preset 方式：mount-validate（standingKeyFor(id)）不报
 #    "Cannot find package" / "did not activate" / "published process-global service(s)" 即通过
 ```

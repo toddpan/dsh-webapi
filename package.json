@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/dsh-web-service",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Expose DSH over HTTP: 60 REST + SSE routes for workspaces, sessions (streaming, history, stats, todos, cancel), models, settings, API keys, skills and files, plus an OpenAI-compatible /chat/completions and an API Key settings page. · 把 DSH 的能力开放成 REST + SSE 接口与 OpenAI 兼容端点，附 API Key 设置页，供三方控制台、客户端与 Agent 集成。",
   "type": "module",
   "main": "./lib/index.js",
@@ -19,6 +19,7 @@
     "client",
     "cordis.patch.yml",
     "skills",
+    "vendor",
     "README.md",
     "README.zh.md",
     "LICENSE"

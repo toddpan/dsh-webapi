@@ -97,6 +97,19 @@ on the machine that hosts DSH): `cat <DSH home>/dsh-web-service/admin-token`. Th
 in the browser's localStorage. Until the gate passes, management buttons such as "新建 API Key" stay
 hidden — no "click, then hit 401" dead ends.
 
+### Theming and offline availability
+
+All three pages (`/docs`, `/docs/reference`, `/settings/api-keys`) share the **HARNESS design tokens**
+(`--dsw-alias-*`, values mirrored from `packages/client/ui-theme/src/styles/design-platform.css`), so
+colours, radii and type match the DSH Web GUI, in both light and dark:
+
+- **Embedded in the GUI sidebar** (same-origin iframe) the page reads the parent document's token
+  values and follows its theme switches live — user-customised themes included;
+- **Opened standalone** it follows `prefers-color-scheme`, and honours `?theme=light` / `?theme=dark`.
+
+Swagger UI is self-hosted from `vendor/swagger-ui/` and served at `/api/v1/docs/assets/*`, so
+`/docs/reference` needs **no public CDN** and works on intranets and offline.
+
 Creating a key offers **two sources for the key value** (the `plaintext` field on `POST /api-keys`):
 
 | Mode | Behaviour |

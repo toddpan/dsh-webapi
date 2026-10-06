@@ -11,25 +11,7 @@
  */
 
 import { pluginVersion } from './version.js'
-
-const CSS_VARS = `:root {
-      --primary: #2563eb;
-      --primary-hover: #1d4ed8;
-      --bg: #0f172a;
-      --card-bg: #1e293b;
-      --border: #334155;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --tag-get: #10b981;
-      --tag-post: #3b82f6;
-      --tag-put: #f59e0b;
-      --tag-delete: #ef4444;
-      --code-bg: #090d16;
-      --radius-sm: 6px;
-      --radius-md: 8px;
-      --shadow-modal: 0 24px 64px rgba(0,0,0,.55);
-      --focus-ring: 0 0 0 3px rgba(37,99,235,.45);
-    }`
+import { HARNESS_TOKENS_CSS, HARNESS_PRIMITIVES_CSS, HARNESS_THEME_SYNC_JS } from './page-theme.js'
 
 function escapeHtml(value: string): string {
   return String(value).replace(/[&<>"']/g, (ch) => {
@@ -76,104 +58,36 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
   <meta name="robots" content="noindex, nofollow">
   <title>API Key 管理 · DSH Web Service</title>
   <style>
-    ${CSS_VARS}
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif; background: var(--bg); color: var(--text); padding: 24px; line-height: 1.5; }
-    .container { max-width: 1100px; margin: 0 auto; }
-    header.page-header { margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
-    h1 { font-size: 26px; font-weight: 700; color: #60a5fa; }
-    .version-tag { font-size: 13px; font-weight: 500; color: var(--text-muted); background: var(--card-bg); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; vertical-align: middle; margin-left: 8px; }
-    .subtitle { color: var(--text-muted); font-size: 14px; margin-top: 6px; }
-    .breadcrumb { font-size: 13px; color: var(--text-muted); margin-bottom: 12px; }
-    .breadcrumb a { color: #60a5fa; text-decoration: none; }
-    .breadcrumb a:hover { text-decoration: underline; }
+    ${HARNESS_TOKENS_CSS}
+    ${HARNESS_PRIMITIVES_CSS}
+    body { padding: 24px; }
+    h2 { font-size: 15px; font-weight: 600; }
+
+    /* 状态卡 */
+    .status-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+
+    /* 空状态 */
+    .empty { text-align: center; padding: 34px 20px; }
+    .empty ol { text-align: left; display: inline-block; margin: 12px auto; color: var(--dsw-alias-label-secondary); font-size: 13px; }
+    .empty li { margin: 4px 0; }
+
+    .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13.5px; }
+
     /* 内嵌模式（DSH GUI 侧边栏 iframe）：隐藏面包屑等导航冗余，收紧留白；
        页头 SWAGGER / GitHub / 问题反馈 / 检查更新 按钮保留可见 */
     body[data-embed] { padding: 16px 18px 20px; }
     body[data-embed] .breadcrumb { display: none !important; }
     body[data-embed] header.page-header { margin-bottom: 14px; padding-bottom: 12px; }
-    .btn { background: var(--primary); color: #fff; border: none; padding: 8px 16px; border-radius: var(--radius-sm); cursor: pointer; font-weight: 500; font-size: 14px; transition: background .2s; }
-    .btn:hover { background: var(--primary-hover); }
-    .btn:disabled { opacity: .5; cursor: not-allowed; }
-    .btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-    .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
-    .btn-ghost:hover { background: var(--card-bg); }
-    .btn-danger { background: var(--tag-delete); }
-    .btn-danger:hover { background: #dc2626; }
-    .btn-sm { padding: 5px 10px; font-size: 12.5px; }
-    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 16px; }
-    .section-title { font-size: 18px; margin: 28px 0 14px; color: #e2e8f0; display: flex; align-items: center; gap: 8px; }
-    .muted { color: var(--text-muted); font-size: 13px; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    code.inline { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; font-size: 12.5px; }
-
-    /* 提示条 */
-    .alert { border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 14px; font-size: 14px; border: 1px solid; display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
-    .alert-info { background: rgba(37,99,235,.12); border-color: rgba(37,99,235,.45); }
-    .alert-warn { background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.5); }
-    .alert-danger { background: rgba(239,68,68,.13); border-color: rgba(239,68,68,.5); }
-    .alert strong { display: block; margin-bottom: 2px; }
-
-    /* 状态卡 */
-    .status-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-    .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-    .badge-active { background: var(--tag-get); color: #0f172a; }
-    .badge-off { background: var(--tag-put); color: #0f172a; }
-    .badge-revoked { background: #475569; color: #e2e8f0; }
-    .badge-config { background: var(--tag-post); color: #fff; }
-
-    /* 表格 */
-    table.key-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-    .key-table th, .key-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-    .key-table th { color: var(--text-muted); font-size: 12px; font-weight: 600; text-transform: none; }
-    .key-table tr:last-child td { border-bottom: none; }
-    .key-table .cell-actions { text-align: right; white-space: nowrap; }
-    .key-masked { font-family: ui-monospace, monospace; font-size: 12.5px; color: #7dd3fc; }
-    .row-revoked { opacity: .55; }
-    .row-highlight { animation: hl 1.8s ease-out; }
-    @keyframes hl { from { background: rgba(37,99,235,.28); } to { background: transparent; } }
-
-    /* 空状态 */
-    .empty { text-align: center; padding: 34px 20px; }
-    .empty ol { text-align: left; display: inline-block; margin: 12px auto; color: var(--text-muted); font-size: 13.5px; }
-    .empty li { margin: 4px 0; }
-
-    /* 表单 */
-    label.field-label { display: block; font-size: 12.5px; color: var(--text-muted); margin-bottom: 5px; }
-    input[type="text"], input[type="password"], input[type="number"], textarea, select {
-      width: 100%; background: var(--code-bg); border: 1px solid var(--border); color: #fff;
-      padding: 8px 12px; border-radius: var(--radius-sm); font-size: 14px; font-family: inherit;
-    }
-    input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; box-shadow: var(--focus-ring); border-color: var(--primary); }
-    .field { margin-bottom: 14px; }
-    .field-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
-    .field-error { font-size: 12.5px; color: #fca5a5; margin-top: 4px; }
-    .input-invalid { border-color: var(--tag-delete) !important; }
-
-    /* 弹层 */
-    dialog { border: 1px solid var(--border); background: var(--card-bg); color: var(--text); border-radius: var(--radius-md); padding: 0; width: min(560px, calc(100vw - 32px)); box-shadow: var(--shadow-modal); }
-    dialog::backdrop { background: rgba(2,6,23,.72); }
-    .modal-head { padding: 16px 20px; border-bottom: 1px solid var(--border); font-size: 16px; font-weight: 600; }
-    .modal-body { padding: 20px; }
-    .modal-foot { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
-    .reveal-box { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all; color: #7dd3fc; max-height: 120px; overflow-y: auto; }
-    .reveal-box:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-
-    /* toast */
-    #toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 18px; font-size: 14px; box-shadow: var(--shadow-modal); opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 60; }
-    #toast.show { opacity: 1; }
-
-    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-    .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13.5px; }
-    .code-block { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; font-family: ui-monospace, monospace; font-size: 12.5px; white-space: pre-wrap; word-break: break-all; color: #38bdf8; }
+    body[data-embed] h1 { font-size: 18px; }
 
     /* 响应式：表格降级为卡片 */
     @media (max-width: 768px) {
       body { padding: 14px; }
       .key-table thead { display: none; }
-      .key-table tr { display: block; border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: 10px; padding: 6px 4px; }
+      .key-table tr { display: block; border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px; margin-bottom: 10px; padding: 6px 4px; }
       .key-table td { display: flex; justify-content: space-between; gap: 12px; border-bottom: none; padding: 6px 10px; }
-      .key-table td::before { content: attr(data-label); color: var(--text-muted); font-size: 12px; flex: 0 0 auto; }
+      .key-table tbody tr:hover { background: transparent; }
+      .key-table td::before { content: attr(data-label); color: var(--dsw-alias-label-secondary); font-size: 12px; flex: 0 0 auto; }
       .key-table .cell-actions { text-align: left; justify-content: flex-end; flex-wrap: wrap; }
     }
     @media (max-width: 480px) {
@@ -181,6 +95,7 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
       .modal-foot .btn { width: 100%; }
     }
   </style>
+  <script>${HARNESS_THEME_SYNC_JS}</script>
 </head>
 <body${embed ? ' data-embed="1"' : ''}>
   <div class="container">

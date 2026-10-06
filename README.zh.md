@@ -90,6 +90,19 @@ dsh plugin --profile web add "$PWD"
 `cat <DSH 配置根>/dsh-web-service/admin-token`，粘贴一次后保存在浏览器 localStorage。
 未通过闸门时，页头的「新建 API Key」等管理按钮一律收起——不会出现「点了按钮才报 401」的死胡同。
 
+### 页面主题与离线可用
+
+`/docs`、`/docs/reference`、`/settings/api-keys` 三个页面统一使用 **HARNESS 设计令牌**
+（`--dsw-alias-*`，取值镜像 `packages/client/ui-theme/src/styles/design-platform.css`），
+因此配色、圆角、字号与 DSH Web GUI 一致，并同时支持浅色 / 深色：
+
+- **内嵌在 GUI 侧边栏时**（同源 iframe）直接读取父页面的令牌计算值并实时跟随其明暗切换，
+  用户自定义主题同样生效；
+- **独立打开时**按系统 `prefers-color-scheme`，也可用 `?theme=light` / `?theme=dark` 强制。
+
+Swagger UI 资产随包自托管在 `vendor/swagger-ui/`，由 `/api/v1/docs/assets/*` 提供，
+**不依赖任何公共 CDN**，内网或离线环境同样可以打开 `/docs/reference`。
+
 新建时有**两种 Key 值来源**，对应 `POST /api-keys` 的 `plaintext` 字段：
 
 | 方式 | 行为 |
