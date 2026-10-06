@@ -103,6 +103,11 @@ dsh plugin --profile web add "$PWD"
 Swagger UI 资产随包自托管在 `vendor/swagger-ui/`，由 `/api/v1/docs/assets/*` 提供，
 **不依赖任何公共 CDN**，内网或离线环境同样可以打开 `/docs/reference`。
 
+内嵌在 GUI 侧边栏时，页内的「SWAGGER / 查看 OpenAPI JSON / 交互式文档」等按钮会在**面板内**跳转
+（目标页给出「← 返回」按钮）。原因：DSH Desktop 主窗口显式拒绝一切新窗口
+（`webContents.setWindowOpenHandler(() => ({ action: 'deny' }))`），`target="_blank"` 在应用内是
+**静默失败**；外部链接（GitHub / 问题反馈）仍会尝试新窗口，被拒时提示复制链接。
+
 新建时有**两种 Key 值来源**，对应 `POST /api-keys` 的 `plaintext` 字段：
 
 | 方式 | 行为 |

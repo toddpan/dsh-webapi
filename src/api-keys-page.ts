@@ -11,7 +11,7 @@
  */
 
 import { pluginVersion } from './version.js'
-import { HARNESS_TOKENS_CSS, HARNESS_PRIMITIVES_CSS, HARNESS_THEME_SYNC_JS } from './page-theme.js'
+import { HARNESS_TOKENS_CSS, HARNESS_PRIMITIVES_CSS, HARNESS_THEME_SYNC_JS, EMBED_NAV_JS } from './page-theme.js'
 
 function escapeHtml(value: string): string {
   return String(value).replace(/[&<>"']/g, (ch) => {
@@ -110,9 +110,9 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
         <div class="subtitle">在此管理第三方程序调用 DSH API 时使用的访问密钥 &bull; 基础前缀 <code class="inline">${base}</code></div>
       </div>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
-        <a href="${base}/docs/reference" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${SWAGGER_ICON}<span>SWAGGER</span></a>
-        <a href="${GITHUB_URL}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${GITHUB_ICON}<span>GitHub</span></a>
-        <a href="${ISSUES_URL}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${FEEDBACK_ICON}<span>问题反馈</span></a>
+        <a href="${base}/docs/reference" data-nav="frame" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${SWAGGER_ICON}<span>SWAGGER</span></a>
+        <a href="${GITHUB_URL}" data-nav="external" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${GITHUB_ICON}<span>GitHub</span></a>
+        <a href="${ISSUES_URL}" data-nav="external" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${FEEDBACK_ICON}<span>问题反馈</span></a>
         <button class="btn btn-ghost" onclick="checkUpdate(this)" style="display:inline-flex; align-items:center; gap:6px;">${SYNC_ICON}<span>检查更新</span></button>
         <button class="btn" id="btnCreate" style="display:none;" onclick="openCreate()">＋ 新建 API Key</button>
       </div>
@@ -374,7 +374,7 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
       <div id="updateResult" style="white-space:pre-wrap; line-height:1.8;">正在检查更新…</div>
     </div>
     <div class="modal-foot">
-      <a id="updateReleaseLink" href="https://github.com/toddpan/dsh-webapi/releases" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:none;">打开 Releases 页</a>
+      <a id="updateReleaseLink" href="https://github.com/toddpan/dsh-webapi/releases" data-nav="external" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:none;">打开 Releases 页</a>
       <button class="btn" onclick="closeDialog('dlgUpdate')">关闭</button>
     </div>
   </dialog>
@@ -949,6 +949,7 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
 
     boot();
   </script>
+  <script>${EMBED_NAV_JS}</script>
 </body>
 </html>`
 }

@@ -291,6 +291,10 @@ dialog::backdrop { background: var(--dsw-alias-bg-mask-1); }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+/* 仅在内嵌（DSH GUI 侧边栏）时出现的元素，如「返回」按钮 */
+[data-embed-only] { display: none !important; }
+html[data-embedded] [data-embed-only] { display: inline-flex !important; }
 `
 
 /**
@@ -319,6 +323,11 @@ export const HARNESS_THEME_SYNC_JS = `
     '--dsw-alias-scrollbar-bg-l1','--dsw-alias-scrollbar-hover-l1'
   ];
   var root = document.documentElement;
+
+  /* 内嵌（DSH GUI 侧边栏 iframe）标记，供 CSS 与 EMBED_NAV_JS 分支使用 */
+  var embedded = false;
+  try { embedded = window.self !== window.top; } catch (err) { embedded = true; }
+  if (embedded) root.setAttribute('data-embedded', '');
 
   function setDark(on) {
     if (on) root.setAttribute('data-ds-dark-theme', '');
@@ -372,5 +381,61 @@ export const HARNESS_THEME_SYNC_JS = `
       attributes: true, attributeFilter: ['data-ds-dark-theme', 'class', 'style'],
     });
   } catch (err) {}
+})();
+`
+
+/**
+ * 内嵌环境下的链接导航（置于 </body> 前）。
+ *
+ * 背景：DSH Desktop 的主窗口显式拒绝一切新窗口 ——
+ * `window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))`，
+ * 并且 `will-navigate` 会拦掉非应用协议的主框架跳转。因此在 GUI 侧边栏 iframe 里，
+ * 任何 `target="_blank"` 都是**静默失败**（点了没反应）——插件页面原先的
+ * 「SWAGGER / 查看 OpenAPI JSON / GitHub」按钮正是如此。
+ *
+ * 解决：内嵌时改走 iframe 自身导航（框架内跳转不受上述拦截），
+ * 外链则尝试 window.open，被拒时给出可复制的提示。
+ *
+ * 用法：<a data-nav="frame" href="/api/v1/docs/reference">  → iframe 内跳转
+ *       <a data-nav="external" href="https://...">          → 尝试新窗口，失败给提示
+ */
+export const EMBED_NAV_JS = `
+(function () {
+  var embedded = false;
+  try { embedded = window.self !== window.top; } catch (err) { embedded = true; }
+  if (!embedded) return;
+
+  function toast(msg) {
+    var el = document.getElementById('toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'toast';
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.classList.add('show');
+    if (el.__t) clearTimeout(el.__t);
+    el.__t = setTimeout(function () { el.classList.remove('show'); }, 6000);
+  }
+
+  document.addEventListener('click', function (ev) {
+    var node = ev.target;
+    var a = node && node.closest ? node.closest('a[data-nav]') : null;
+    if (!a) return;
+    var href = a.getAttribute('href');
+    if (!href) return;
+    var mode = a.getAttribute('data-nav');
+    if (mode === 'frame') {
+      ev.preventDefault();
+      window.location.href = href;
+      return;
+    }
+    if (mode === 'external') {
+      ev.preventDefault();
+      var win = null;
+      try { win = window.open(href, '_blank', 'noopener'); } catch (err) { win = null; }
+      if (!win) toast('当前环境不允许打开新窗口，请复制链接到浏览器访问：' + href);
+    }
+  }, true);
 })();
 `

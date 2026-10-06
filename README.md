@@ -110,6 +110,12 @@ colours, radii and type match the DSH Web GUI, in both light and dark:
 Swagger UI is self-hosted from `vendor/swagger-ui/` and served at `/api/v1/docs/assets/*`, so
 `/docs/reference` needs **no public CDN** and works on intranets and offline.
 
+Inside the GUI sidebar, in-page buttons such as "Swagger / OpenAPI JSON / interactive docs" navigate
+**within the panel** (the target page offers a "← back" button). DSH Desktop's main window denies all
+new windows (`webContents.setWindowOpenHandler(() => ({ action: 'deny' }))`), so `target="_blank"`
+fails **silently** inside the app; external links still try a new window and fall back to a
+copy-the-link hint when refused.
+
 Creating a key offers **two sources for the key value** (the `plaintext` field on `POST /api-keys`):
 
 | Mode | Behaviour |

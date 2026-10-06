@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { WebServiceConfig } from './types.js'
 import { pluginVersion } from './version.js'
-import { HARNESS_TOKENS_CSS, HARNESS_PRIMITIVES_CSS, HARNESS_THEME_SYNC_JS } from './page-theme.js'
+import { HARNESS_TOKENS_CSS, HARNESS_PRIMITIVES_CSS, HARNESS_THEME_SYNC_JS, EMBED_NAV_JS } from './page-theme.js'
 
 /**
  * vendor/swagger-ui 下随包分发的 Swagger UI 资产。
@@ -804,12 +804,12 @@ function generateDocsHtml(prefix: string, requireAuth: boolean): string {
         <div class="subtitle">三方调用专属接口平台 &bull; 基础前缀: <code>${prefix}</code></div>
       </div>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
-        <a href="${prefix}/docs/reference" class="btn btn-ghost" style="text-decoration:none;">在线调试 (Swagger)</a>
-        <a href="${GITHUB_URL}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${GITHUB_ICON}<span>GitHub</span></a>
-        <a href="${ISSUES_URL}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${FEEDBACK_ICON}<span>问题反馈</span></a>
+        <a href="${prefix}/docs/reference" data-nav="frame" class="btn btn-ghost" style="text-decoration:none;">在线调试 (Swagger)</a>
+        <a href="${GITHUB_URL}" data-nav="external" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${GITHUB_ICON}<span>GitHub</span></a>
+        <a href="${ISSUES_URL}" data-nav="external" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${FEEDBACK_ICON}<span>问题反馈</span></a>
         <button class="btn btn-ghost" id="btnCheckUpdate" onclick="checkUpdate(this)" style="display:inline-flex; align-items:center; gap:6px;">${SYNC_ICON}<span>检查更新</span></button>
         <a href="${prefix}/settings/api-keys" class="btn" style="text-decoration:none;">管理 API Key</a>
-        <a href="${prefix}/openapi.json" target="_blank" class="btn btn-ghost" style="text-decoration:none;">查看 OpenAPI JSON</a>
+        <a href="${prefix}/openapi.json" data-nav="frame" target="_blank" class="btn btn-ghost" style="text-decoration:none;">查看 OpenAPI JSON</a>
       </div>
     </header>
 
@@ -976,7 +976,7 @@ function generateDocsHtml(prefix: string, requireAuth: boolean): string {
       <div id="updateResult">正在检查更新…</div>
     </div>
     <div class="modal-foot">
-      <a id="updateReleaseLink" href="${GITHUB_URL}/releases" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:none;">打开 Releases 页</a>
+      <a id="updateReleaseLink" href="${GITHUB_URL}/releases" data-nav="external" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:none;">打开 Releases 页</a>
       <button class="btn" onclick="closeDialog()">关闭</button>
     </div>
   </dialog>
@@ -1093,6 +1093,7 @@ function generateDocsHtml(prefix: string, requireAuth: boolean): string {
       }
     }
   </script>
+  <script>${EMBED_NAV_JS}</script>
 </body>
 </html>`
 }
@@ -1254,8 +1255,9 @@ function generateReferenceHtml(prefix: string): string {
     <span class="brand">DSH Web Service 接口调试</span>
     <span class="version-tag">v${pluginVersion}</span>
     <span class="spacer"></span>
-    <a class="btn btn-ghost btn-sm" href="${prefix}/docs">交互式文档</a>
-    <a class="btn btn-ghost btn-sm" href="${prefix}/openapi.json" target="_blank" rel="noopener noreferrer">openapi.json</a>
+    <a class="btn btn-ghost btn-sm" data-embed-only data-nav="frame" href="${prefix}/settings/api-keys?embed=1">&larr; 返回 API Key 管理</a>
+    <a class="btn btn-ghost btn-sm" data-nav="frame" href="${prefix}/docs">交互式文档</a>
+    <a class="btn btn-ghost btn-sm" data-nav="frame" href="${prefix}/openapi.json" target="_blank" rel="noopener noreferrer">openapi.json</a>
   </div>
   <div id="swagger-ui"></div>
   <div id="fallback" class="card">
@@ -1281,6 +1283,7 @@ function generateReferenceHtml(prefix: string): string {
       document.getElementById('fallback').style.display = 'block';
     }
   </script>
+  <script>${EMBED_NAV_JS}</script>
 </body>
 </html>`
 }
