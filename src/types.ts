@@ -45,6 +45,8 @@ export interface SessionItem {
     model: string
     reasoningEffort?: string
   }
+  /** 模式预设（建会话时的 agentPreset；宿主元数据可读则回带，否则来自本插件运行时记录） */
+  agentPreset?: string
 }
 
 export interface SessionCreateInput {
@@ -65,6 +67,8 @@ export interface SessionUpdateInput {
   provider?: string
   model?: string
   reasoningEffort?: string
+  /** 模式预设：宿主支持运行时应用则立即生效，否则仅记录并返回 applied:false（上层任务级持久化兜底） */
+  agentPreset?: string
 }
 
 export interface SessionPromptInput {

@@ -47,6 +47,42 @@ function finiteNonNegative(v: any): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0
 }
 
+/** 会话级 agentPreset 运行时记录（宿主会话元数据不可读时的 GET 回读兜底；进程内存级）。 */
+const sessionPresetMemo = new Map<string, string>()
+
+/**
+ * 尽力对运行中会话应用模式预设：探测宿主 sessionController / agentPresets 服务上的
+ * 运行时应用能力（不同宿主版本能力不定，方法名/签名都无法从类型确认）。没有可用能力
+ * 或调用失败都返回 applied:false 而不报错——preset 的持久化语义由上层（WorkBuddy
+ * 任务级 agentPreset）兜底，下轮建会话必然生效。
+ */
+async function applySessionAgentPreset(ctx: Context, sessionId: string, preset: string): Promise<{ applied: boolean; reason?: string }> {
+  if (!preset) return { applied: false, reason: 'preset-cleared' }
+  const sessionController = ctx.get('sessionController') as any
+  for (const method of ['selectPreset', 'applyPreset', 'setPreset', 'applyAgentPreset']) {
+    if (sessionController && typeof sessionController[method] === 'function') {
+      try {
+        await sessionController[method]({ sessionId, agentPreset: preset, preset })
+        return { applied: true }
+      } catch (e: any) {
+        return { applied: false, reason: e?.message || `${method} failed` }
+      }
+    }
+  }
+  const presetsService = ctx.get('agentPresets') as any
+  for (const method of ['applySession', 'applyToSession']) {
+    if (presetsService && typeof presetsService[method] === 'function') {
+      try {
+        await presetsService[method](sessionId, preset)
+        return { applied: true }
+      } catch (e: any) {
+        return { applied: false, reason: e?.message || `${method} failed` }
+      }
+    }
+  }
+  return { applied: false, reason: 'host-not-supported' }
+}
+
 function eventTime(ev: any): number | null {
   return finiteNonNegative(ev?.time) ? ev.time : null
 }
@@ -430,6 +466,7 @@ export function registerSessionRoutes(ctx: Context, router: any, config: WebServ
         workspaceId,
         status: isRunning ? 'running' : 'idle',
         model: currentModel,
+        agentPreset: (meta as any)?.agentPreset || sessionPresetMemo.get(String(meta.id)),
       }
 
       sendJson(res, 200, {
@@ -486,6 +523,11 @@ export function registerSessionRoutes(ctx: Context, router: any, config: WebServ
         } catch {
           // ignore rename error on create
         }
+      }
+
+      // 记录建会话时的模式预设（GET /sessions/:id 回读兜底）
+      if (body.agentPreset && String(body.agentPreset).trim()) {
+        sessionPresetMemo.set(createdSessionId, String(body.agentPreset).trim())
       }
 
       // 如果指定了特定模型
@@ -565,17 +607,46 @@ export function registerSessionRoutes(ctx: Context, router: any, config: WebServ
         }
       }
 
-      // 修改模型
-      if (body.provider && body.model) {
+      // 修改模型（provider+model 成对修改；仅 reasoningEffort 时与当前 selection 合并，支持单独调推理强度）
+      if ((body.provider && body.model) || body.reasoningEffort) {
         if (sessionController && typeof sessionController.selectModel === 'function') {
+          let provider = body.provider
+          let model = body.model
+          if ((!provider || !model) && body.reasoningEffort) {
+            // 单独调强度：读当前 selection 合并，避免把模型选择清掉
+            const agentsService = ctx.get('agents') as any
+            const agent = agentsService?.get ? agentsService.get(sessionId) : undefined
+            const current =
+              agent && sessionController.agents?.selectionFor
+                ? sessionController.agents.selectionFor(agent)?.current
+                : undefined
+            if (!current?.provider || !current?.model) {
+              sendJson(res, 400, {
+                ok: false,
+                error: '会话尚无模型选择记录，无法单独修改推理强度（请连同 provider/model 一起传）',
+                code: 'NO_MODEL_SELECTION',
+              })
+              return
+            }
+            provider = current.provider
+            model = current.model
+          }
           const modelResult = await sessionController.selectModel({
             sessionId,
-            provider: body.provider,
-            model: body.model,
+            provider: provider as string,
+            model: model as string,
             reasoningEffort: body.reasoningEffort,
           })
           updates.model = modelResult
         }
+      }
+
+      // 模式预设：宿主支持运行时应用则立即生效；否则仅记录并返回 applied:false（上层任务级持久化兜底）
+      if (body.agentPreset !== undefined) {
+        const preset = String(body.agentPreset || '').trim()
+        if (preset) sessionPresetMemo.set(sessionId, preset)
+        else sessionPresetMemo.delete(sessionId)
+        updates.preset = { id: preset || undefined, ...(await applySessionAgentPreset(ctx, sessionId, preset)) }
       }
 
       sendJson(res, 200, {
