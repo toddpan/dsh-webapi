@@ -1,4 +1,4 @@
-# dsh-web-service 挂载参考（@dsh-external/dsh-web-service）
+# dsh-web-service 挂载参考（dsh-web-service）
 
 > 常规安装看 [README.md](README.md)（English）/ [README.zh.md](README.zh.md)（中文）。
 > 本文件补充底层细节：插件行怎么写、preset 怎么挂、peer 依赖有哪些、挂载后怎么验证。
@@ -28,7 +28,7 @@ dsh plugin --profile web add \
 
 ```yaml
 - id: dsh-web-service
-  name: '@dsh-external/dsh-web-service'
+  name: 'dsh-web-service'
   config: {}
 ```
 
@@ -64,7 +64,7 @@ peerDependencies：`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、
 
 ```bash
 # 1. 热重载后枚举插件确认在列且 fiber 正常
-#    dev_plugin_status → 应出现 @dsh-external/dsh-web-service
+#    dev_plugin_status → 应出现 dsh-web-service
 
 # 2. 探活：系统状态接口应返回 ok:true
 curl -s http://127.0.0.1:3080/api/v1/system/status
@@ -81,7 +81,7 @@ curl -sI http://127.0.0.1:3080/api/v1/docs/assets/swagger-ui-bundle.js | head -1
 #    "Cannot find package" / "did not activate" / "published process-global service(s)" 即通过
 ```
 
-启动日志无 `Cannot find package '@dsh-external/dsh-web-service'`、
+启动日志无 `Cannot find package 'dsh-web-service'`、
 无 `invalid config`、无路由注册报错，即挂载成功。
 
 ### 插件清单里显示「未运行」怎么办
@@ -91,10 +91,10 @@ curl -sI http://127.0.0.1:3080/api/v1/docs/assets/swagger-ui-bundle.js | head -1
 
 ```bash
 # 1. 包内是否有入口文件与构建产物
-ls "$DSH_HOME/profiles/<profile>/node_modules/@dsh-external/dsh-web-service/lib/index.js"
+ls "$DSH_HOME/profiles/<profile>/node_modules/dsh-web-service/lib/index.js"
 
 # 2. 直接复现加载错误（报 ERR_MODULE_NOT_FOUND 即为缺文件）
-node -e "import('@dsh-external/dsh-web-service')" --input-type=module
+node -e "import('dsh-web-service')" --input-type=module
 ```
 
 确认包完整后，**失败的条目不会被自动重试**：在插件管理器里把该条目关掉再打开，或重启 DSH。

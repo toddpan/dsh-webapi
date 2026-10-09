@@ -6,7 +6,7 @@ whenToUse: 用户要求通过 HTTP/REST API 调用 DSH、集成三方系统、�
 
 # DSH Web Service API（dsh-web-service）
 
-本机 DSH 已由插件 `@dsh-external/dsh-web-service` 暴露为 Web Service。所有能力通过 HTTP 访问，第三方系统、脚本或任何 OpenAI SDK 均可直接调用。
+本机 DSH 已由插件 `dsh-web-service` 暴露为 Web Service。所有能力通过 HTTP 访问，第三方系统、脚本或任何 OpenAI SDK 均可直接调用。
 
 ## 服务地址（按访问路径二选一）
 

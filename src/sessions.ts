@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service - Session Management API Handlers
+ * dsh-web-service - Session Management API Handlers
  */
 
 import type { Context } from '@deepseek-ai/cordis'

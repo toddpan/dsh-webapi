@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service - API Key 存储与鉴权服务
+ * dsh-web-service - API Key 存储与鉴权服务
  *
  * 设计要点（与 src/api-keys.ts 的管理路由、src/router.ts 的数据面闸门配合）：
  * - 明文 Key 只在「新建 / 轮换」响应里出现一次，之后不可再取回；

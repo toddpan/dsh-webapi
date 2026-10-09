@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service - Types & Interfaces
+ * dsh-web-service - Types & Interfaces
  */
 
 export interface ApiResponse<T = unknown> {

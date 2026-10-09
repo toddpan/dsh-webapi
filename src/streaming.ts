@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service - Streaming & Chat API Handlers
+ * dsh-web-service - Streaming & Chat API Handlers
  */
 
 import type { Context } from '@deepseek-ai/cordis'

@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service - 会话文件上传
+ * dsh-web-service - 会话文件上传
  *
  * POST /sessions/:id/files
  *  - multipart/form-data：支持多文件字段（每个带 filename 的 part 都会保存）

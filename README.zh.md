@@ -1,4 +1,4 @@
-# dsh-webapi (@dsh-external/dsh-web-service)
+# dsh-webapi (dsh-web-service)
 
 [English](README.md) | **中文**
 

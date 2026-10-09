@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service - Skill 管理 API
+ * dsh-web-service - Skill 管理 API
  *
  * 提供远端 DSH 技能全生命周期管理（供 onenat-workbuddy「技能中心」消费）：
  *   GET    /skills                列表（管理视图：见全部，含 root/path）

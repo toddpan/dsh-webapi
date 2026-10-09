@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service - OpenAPI Spec & Built-in Interactive Web Docs
+ * dsh-web-service - OpenAPI Spec & Built-in Interactive Web Docs
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'

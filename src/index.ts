@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service
+ * dsh-web-service
  * DSH 全功能 Web Service API 插件
  * 提供标准 RESTful API、SSE 会话流式接口、OpenAI 协议兼容、工作区管理、会话生命周期与模型设置
  */
@@ -27,7 +27,7 @@ import { checkForUpdate } from './updates.js'
 import type { WebServiceConfig } from './types.js'
 
 
-export const name = '@dsh-external/dsh-web-service'
+export const name = 'dsh-web-service'
 export const inject = ['webServer', 'tools']
 
 export interface Config extends WebServiceConfig {}
@@ -60,7 +60,7 @@ export function apply(ctx: Context, config: Config): void {
     sendJson(res, 200, {
       ok: true,
       data: {
-        name: '@dsh-external/dsh-web-service',
+        name: 'dsh-web-service',
         version: pluginVersion,
         status: 'running',
         port: webServer?.port || 3080,
@@ -110,7 +110,7 @@ export function apply(ctx: Context, config: Config): void {
         }
       },
     })
-  }, '@dsh-external/dsh-web-service: webServer prefix route')
+  }, 'dsh-web-service: webServer prefix route')
 
   // 4. 可选：开启独立 HTTP 监听端口
   if (config.standalonePort && config.standalonePort > 0) {
@@ -131,7 +131,7 @@ export function apply(ctx: Context, config: Config): void {
       return () => {
         server.close()
       }
-    }, '@dsh-external/dsh-web-service: standalone http server')
+    }, 'dsh-web-service: standalone http server')
   }
 
   // 5. 注册模型 Tool，方便 LLM 获知 Web Service 的运行端点与说明
@@ -162,6 +162,6 @@ export function apply(ctx: Context, config: Config): void {
         }
         return JSON.stringify(info, null, 2)
       },
-    })), '@dsh-external/dsh-web-service: info tool')
+    })), 'dsh-web-service: info tool')
   }
 }

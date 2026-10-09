@@ -1,4 +1,4 @@
-# `@dsh-external/dsh-web-service` API Key 设置页面 — 信息架构 / 交互流程 / 界面实现规范
+# `dsh-web-service` API Key 设置页面 — 信息架构 / 交互流程 / 界面实现规范
 
 > 状态：设计稿（未实现，不改任何代码）
 > 参照物：`src/openapi.ts` `generateDocsHtml()`（GET `{prefix}/docs` 交互式文档页）

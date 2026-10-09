@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service - API Key 管理（设置页 + 管理接口）
+ * dsh-web-service - API Key 管理（设置页 + 管理接口）
  *
  * 路由：
  *   页面      GET    {prefix}/settings/api-keys        （公开，与 /docs 一致）

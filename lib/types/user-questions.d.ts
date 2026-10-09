@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service - ask_user_question 答复桥（headless 集成）
+ * dsh-web-service - ask_user_question 答复桥（headless 集成）
  *
  * DSH 的 ask_user_question 工具会挂起等待 `user-questions/request` waterfall
  * 的答复者（浏览器客户端是默认答复器；REST 集成没有浏览器 → NO_PROVIDER，

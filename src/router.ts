@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service - HTTP Router & Dispatcher
+ * dsh-web-service - HTTP Router & Dispatcher
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'

@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service - API Key 设置页（服务端渲染 HTML）
+ * dsh-web-service - API Key 设置页（服务端渲染 HTML）
  *
  * 与 src/openapi.ts 的 generateDocsHtml() 同构：一条路由 + 一个返回整页内联 HTML 的纯函数，
  * 零构建链、零依赖。视觉沿用 /docs 的 :root 变量与 kebab-case 命名。

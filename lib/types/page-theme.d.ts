@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-web-service - 服务端渲染页面的 HARNESS 主题层
+ * dsh-web-service - 服务端渲染页面的 HARNESS 主题层
  *
  * 本插件的两个 SSR 页面（/docs、/docs/reference）与 API Key 设置页都是「一条路由 + 一个返回整页
  * HTML 的纯函数」，不经过构建链。为了让它们的配色与 DSH Web GUI 完全一致，这里把 HARNESS 的

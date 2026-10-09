@@ -12,7 +12,7 @@
  * 的回调只在座位就绪后运行，缺座位的 shell 只会让面板缺席，不会启动失败。
  */
 window.__ModuleLoader__.load({
-  id: '@dsh-external/dsh-web-service',
+  id: 'dsh-web-service',
   factory: function (require) {
     var module = { exports: {} };
     var exports = module.exports;
@@ -27,7 +27,7 @@ window.__ModuleLoader__.load({
     var PANEL_ORDER = 40;
 
     // ---------- 样式（材质化时注入一次，带去重标记） ----------
-    var CSS_TAG = '@dsh-external/dsh-web-service/client/panel.css';
+    var CSS_TAG = 'dsh-web-service/client/panel.css';
     var CSS = ''
       + '.dshw-view{height:100%;min-height:0;overflow:hidden;display:flex;flex-direction:column;'
       + 'background:var(--dsw-alias-bg-base,transparent)}'
@@ -37,7 +37,7 @@ window.__ModuleLoader__.load({
       if (typeof document === 'undefined') return;
       if (document.querySelector('style[data-plugin-css="' + CSS_TAG + '"]') !== null) return;
       var tag = document.createElement('style');
-      tag.dataset.plugin = '@dsh-external/dsh-web-service';
+      tag.dataset.plugin = 'dsh-web-service';
       tag.dataset.pluginCss = CSS_TAG;
       tag.textContent = CSS;
       document.head.appendChild(tag);

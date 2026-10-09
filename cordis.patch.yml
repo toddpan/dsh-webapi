@@ -2,5 +2,5 @@
 # Mounts onto the bundled webserver's prefix route (default /api/v1).
 - insert:
     - id: dsh-web-service
-      name: '@dsh-external/dsh-web-service'
+      name: 'dsh-web-service'
       config: {}
