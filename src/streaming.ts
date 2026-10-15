@@ -401,7 +401,8 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
           cleanup()
         })
 
-        await submitPromptToSession(ctx, sessionId, { prompt: promptText })
+        // ALS 携带 sessionId，供 ask_user_question 答复桥归属（与另外三个入口保持一致）
+        await askSessionStorage.run({ sessionId }, () => submitPromptToSession(ctx, sessionId, { prompt: promptText }))
         return
       }
 
