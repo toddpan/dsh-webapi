@@ -187,6 +187,7 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
 | 模块 | 方法 | 路径 | 说明 |
 |---|---|---|---|
 | **System** | `GET` | `/system/status` | 系统状态、在线模型及端口信息 |
+| | `GET` | `/ping` | 机器指纹（IP/MAC），判定 127.0.0.1（natpass 隧道）节点是否本机 |
 | **Workspaces** | `GET` | `/workspaces` | 查询工作区列表 |
 | | `POST` | `/workspaces` | 创建/添加工作区 |
 | | `GET` | `/workspaces/:id` | 获取工作区详情 |
@@ -202,7 +203,7 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
 | | `GET` | `/sessions/:id/stats` | 会话实时统计：轮/步、LLM 与工具调用耗时、首 token 均值、解码吞吐、缓存命中、token 账本（对齐 harness session-stats 投影语义） |
 | | `GET` | `/sessions/:id/todos` | 会话任务清单 + 运行时长：`todos[{content,status}]`（`todo_write` 整表投影，`turn/start` 清空）、`counts{completed,inProgress,pending}`、`running`/`elapsedMs`（当前或最后一轮 turn 墙钟）、`turnStartedAt`/`turnEndedAt`/`updatedAt`（供三方控制台渲染「任务」面板，≥0.1.8） |
 | | `GET` | `/sessions/:id/skills` | 会话作用域技能目录（按会话 cwd 解析技能根，支持 `?search=` 过滤；供输入框 "/" 技能候选，对齐 harness skills/list） |
-| | `GET` | `/sessions/:id/questions` | 查询会话当前挂起的 ask_user_question 问题批次（REST 集成的宿主侧答复桥，≥0.1.7；含 connection 层抢答绕过与 ALS 会话归属） |
+| | `GET` | `/sessions/:id/questions` | 查询会话当前挂起的 ask_user_question 问题批次（REST 集成的宿主侧答复桥，≥0.1.7；含 connection 层抢答绕过；≥0.3.7 起仅按 ALS 归属 REST 会话，GUI/浏览器来源的提问一律透传，修复 GUI 提问 UI 不显示的回归） |
 | | `POST` | `/sessions/:id/answers` | 提交挂起问题的答复（`answers: [{id, selected, custom?}]`），resolve 后工具以普通 tool/result 返回、会话继续 |
 | | `POST` | `/sessions/:id/cancel` | 中止会话轮次 |
 | | `POST` | `/sessions/:id/files` | 上传文件到会话工作区 (multipart 多文件 或 raw+?filename=)；同名自动 -1/-1 去重，AI 可用文件工具直接读取 |

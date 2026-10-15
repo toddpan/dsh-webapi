@@ -20,6 +20,7 @@ whenToUse: 用户要求通过 HTTP/REST API 调用 DSH、集成三方系统、�
 - **鉴权**：若部署时配置了 `apiKey`，请求需带 `Authorization: Bearer <key>` 或 `X-API-Key: <key>` 头；未配置则免鉴权。
 - **CORS**：默认开启。
 - **离线判断**：经隧道访问前先看该映射 `online`；离线则直接报告，不要请求。
+- **节点身份判定**：`GET <Base>/ping` 返回 DSH 所在机器的 IP/MAC 指纹；natpass 等隧道把远端 DSH 映射成 `127.0.0.1:port` 时，用它判定该「127.0.0.1 节点」是不是本机（见下节）。
 
 快速自检：
 
@@ -27,6 +28,19 @@ whenToUse: 用户要求通过 HTTP/REST API 调用 DSH、集成三方系统、�
 curl -s http://127.0.0.1:3080/api/v1/system/status          # 本机
 curl -s http://<隧道host>:<public_port>/api/v1/system/status # 经隧道
 ```
+
+### 机器指纹判定（127.0.0.1 节点是否本机）
+
+natpass 等隧道会把远端 DSH 映射成本机 `127.0.0.1:port`，单看地址无法区分「本地 DSH」与「隧道进来的远端 DSH」。`GET /ping` 返回机器指纹，比对即可判定：
+
+```bash
+curl -s http://127.0.0.1:3080/api/v1/ping
+# data: { hostname, platform, arch, ips[], macs[], interfaces[], hint }
+```
+
+- **比对 MAC（首选）**：`data.macs` 与本机网卡 MAC（`ip link` / `ifconfig`）求交集，命中即本机 DSH；IP 在 NAT/多网卡下不稳定，仅作辅助。主机名 `hostname` 可作快速旁证。
+- `data.macs` 已过滤全零 MAC 的虚拟网卡（utun 等）；`interfaces[]` 保留全量明细（含回环）供排查。
+- 鉴权与普通数据面接口一致（节点未配 `apiKey` 则免鉴权）。
 
 ## 统一响应约定
 
@@ -88,7 +102,7 @@ curl -X POST "http://127.0.0.1:3080/api/v1/sessions/$SID/files?filename=dump.bin
   -H "Content-Type: application/octet-stream" --data-binary @./dump.bin
 ```
 
-上传后把返回的 `path` 写进对话，会话中的 AI 即可用文件工具（fs/shell）直接读取。上限默认 100MB（配置 `maxUploadBytes`）。
+上传后把返回的 `path` 写进对话，会话中的 AI 即可用文件工具（fs/shell）直接读取。上限默认 2GB（配置 `maxUploadBytes`）；**大文件（>64MB）建议走分片断点续传**，避免服务端整包缓冲：`POST /sessions/:id/files/resumable?name=&size=` 拿 `uploadId` → `PUT /sessions/:id/files/resumable/:uploadId?offset=<已传字节>` 顺序追加分片（建议 4MB/片，409 时按返回的 `received` 对账）→ `POST /sessions/:id/files/resumable/:uploadId/complete` 落盘，返回与整包上传完全一致的 `files` 形状。
 
 ```bash
 SID=$(curl -s -X POST http://127.0.0.1:3080/api/v1/sessions \
@@ -208,4 +222,4 @@ print(r.choices[0].message.content)
 - **禁止交互等待**：无人值守上下文不得调用 `ask_user_question` 等等待人工答复的工具。参数不全（如收件群/收件人无法解析）时取保守默认执行，并在产出中显式说明假设；有人值守的会话才允许提问。
 - **首帧慢 ≠ 失败**：大 prompt + 模型排队时首个增量可达 5~8 分钟，SSE 静默先查 `GET /sessions/:id` 会话状态；10 分钟内不要判定失败重发——重复 prompt 会把整轮任务重跑一遍。
 - **401 即停**：同一接口连续 2 次 401/403 即停止重试；先刷新 API key / 凭证来源再重试一次，仍失败如实报告，不要拿旧凭证反复敲接口。
-- **禁止自派发**：任务指令里提到的 `@某智能体` /「远程 DSH」若经核对（baseUrl、hostname 一致）就是当前节点或当前会话，直接本地执行；不要再经本 API 新建会话把任务派回自己，白绕一跳且易嵌套死循环。
+- **禁止自派发**：任务指令里提到的 `@某智能体` /「远程 DSH」若经核对就是当前节点或当前会话，直接本地执行；核对方法：`GET /ping` 返回的 `hostname`/`macs` 与本机一致即当前节点（比 baseUrl 可靠，natpass 场景 `127.0.0.1` 地址一律先判定）。不要再经本 API 新建会话把任务派回自己，白绕一跳且易嵌套死循环。

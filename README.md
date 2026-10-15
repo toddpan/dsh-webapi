@@ -201,6 +201,7 @@ Default prefix: `/api/v1`
 | Module | Method | Path | Notes |
 |---|---|---|---|
 | **System** | `GET` | `/system/status` | System status, live models, port info |
+| | `GET` | `/ping` | Machine fingerprint (IPs/MACs) to tell whether a 127.0.0.1 (natpass) node is the local machine |
 | **Workspaces** | `GET` | `/workspaces` | List workspaces |
 | | `POST` | `/workspaces` | Create / add a workspace |
 | | `GET` | `/workspaces/:id` | Workspace detail |
@@ -216,7 +217,7 @@ Default prefix: `/api/v1`
 | | `GET` | `/sessions/:id/stats` | Live stats: turns/steps, LLM and tool timings, mean first token, decode throughput, cache hits, token ledger (matches the harness session-stats projection) |
 | | `GET` | `/sessions/:id/todos` | Task list + elapsed time: `todos[{content,status}]` (`todo_write` full-table projection, cleared on `turn/start`), `counts{completed,inProgress,pending}`, `running`/`elapsedMs` (wall clock of the current or last turn), `turnStartedAt`/`turnEndedAt`/`updatedAt` — for a third-party console's "tasks" panel (≥0.1.8) |
 | | `GET` | `/sessions/:id/skills` | Session-scoped skill catalog (resolves skill roots from the session cwd, supports `?search=`; mirrors `skills/list` for a "/" completion menu) |
-| | `GET` | `/sessions/:id/questions` | Pending `ask_user_question` batches (host-side answer bridge, ≥0.1.7; includes the connection-layer race bypass and ALS session binding) |
+| | `GET` | `/sessions/:id/questions` | Pending `ask_user_question` batches (host-side answer bridge, ≥0.1.7; connection-layer race bypass + ALS-only session binding — browser/GUI-origin questions always pass through, ≥0.3.7) |
 | | `POST` | `/sessions/:id/answers` | Answer pending questions (`answers: [{id, selected, custom?}]`); the tool returns as an ordinary tool/result and the session continues |
 | | `POST` | `/sessions/:id/cancel` | Abort the current turn |
 | | `POST` | `/sessions/:id/files` | Upload into the session workspace (multipart, or raw + `?filename=`); duplicate names get `-1` suffixes, and the agent can read them with its file tools |
