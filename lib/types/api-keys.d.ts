@@ -29,4 +29,12 @@ export interface AdminGuardOptions {
     /** 允许非回环地址访问管理接口（默认 false） */
     adminRemoteAccess?: boolean;
 }
-export declare function registerApiKeyRoutes(router: HttpRouter, config: WebServiceConfig, store: ApiKeyStore): void;
+export interface ApiKeyRouteOptions {
+    /**
+     * 解析主 webserver 实际监听端口（每次渲染页面时调用——桌面端 GUI 端口随启动变化，
+     * 不能在注册期固定）。页面据此注入 http://127.0.0.1:<port><prefix> 服务地址：
+     * GUI 内嵌在 dsh-app:// 等自定义协议 iframe 里，location.origin 不是可用的访问地址。
+     */
+    getMainPort?: () => number;
+}
+export declare function registerApiKeyRoutes(router: HttpRouter, config: WebServiceConfig, store: ApiKeyStore, options?: ApiKeyRouteOptions): void;

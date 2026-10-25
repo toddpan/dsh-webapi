@@ -10,4 +10,4 @@
  * - 新建 / 轮换成功后弹层展示完整 Key（关闭即从 DOM 清除）；列表页另有「复制」按钮，
  *   通过管理令牌鉴权的 /api-keys/:id/reveal 现取现用，明文只进剪贴板、不落 DOM。
  */
-export declare function generateApiKeysHtml(prefix: string, adminTokenPath?: string, embed?: boolean): string;
+export declare function generateApiKeysHtml(prefix: string, adminTokenPath?: string, embed?: boolean, httpBase?: string, extraBases?: string[]): string;

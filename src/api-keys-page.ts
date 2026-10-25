@@ -44,13 +44,17 @@ const SYNC_ICON =
 const SWAGGER_ICON =
   '<svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" aria-hidden="true" style="flex:0 0 auto;"><path d="m11.28 3.22 4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734L13.94 8l-3.72-3.72a.749.749 0 0 1 .326-1.275.749.749 0 0 1 .734.215Zm-6.56 0a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L2.06 8l3.72 3.72a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L.47 8.53a.75.75 0 0 1 0-1.06Z"/></svg>'
 
-export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed = false): string {
+export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed = false, httpBase = '', extraBases: string[] = []): string {
   // 两种语境分开转义：HTML 文本/属性用实体转义，JS 字符串字面量用 JSON.stringify（script 内容不做实体解码）
   const base = escapeHtml(prefix)
   const jsBase = JSON.stringify(prefix)
   // 管理令牌的绝对路径（服务端注入）；为空时退回通用相对提示
   const tokenPath = escapeHtml(adminTokenPath || '~/.dsh/dsh-web-service/admin-token')
   const jsTokenPath = JSON.stringify(adminTokenPath || '~/.dsh/dsh-web-service/admin-token')
+  // 服务端注入的 HTTP 服务地址（webserver 实际监听端口）；GUI 内嵌在 dsh-app:// 等
+  // 自定义协议 iframe 里时 location.origin 不是可用地址，页面以它为准
+  const jsHttpBase = JSON.stringify(httpBase)
+  const jsExtraBases = JSON.stringify(extraBases)
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -109,6 +113,9 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
       <div>
         <h1>API Key 管理 <span class="version-tag">v${pluginVersion}</span></h1>
         <div class="subtitle">在此管理第三方程序调用 DSH API 时使用的访问密钥 &bull; 基础前缀 <code class="inline">${base}</code></div>
+        <div class="subtitle" style="margin-top:4px;">服务地址（当前访问） <code class="inline" id="hdrFullBase">&hellip;</code>
+          <button class="btn btn-ghost btn-sm" onclick="copyBaseUrl()" style="margin-left:6px;">复制地址</button>
+        </div>
       </div>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <a href="${base}/docs/reference" data-nav="frame" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${SWAGGER_ICON}<span>SWAGGER</span></a>
@@ -199,7 +206,13 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
         <p class="muted" style="margin-bottom:10px;">
           客户端请求需携带以下任一请求头。把 <code class="inline">&lt;key&gt;</code> 换成刚生成的完整密钥：
         </p>
-        <div class="code-block" id="curlBox"></div>
+        <div class="field-label" style="margin-top:4px;">服务地址（Base URL，供三方客户端配置）</div>
+        <div class="code-block" id="baseUrlBox"></div>
+        <div id="baseUrlExtras" class="muted" style="margin-top:6px; font-size:12px; line-height:1.9;"></div>
+        <div style="margin-top:8px;">
+          <button class="btn btn-ghost btn-sm" onclick="copyBaseUrl()">复制服务地址</button>
+        </div>
+        <div class="code-block" id="curlBox" style="margin-top:14px;"></div>
         <div style="margin-top:12px;">
           <button class="btn btn-ghost btn-sm" onclick="copyCurl()">复制 curl 示例</button>
         </div>
@@ -385,6 +398,14 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
   <script>
     'use strict';
     const BASE = ${jsBase};
+    // 服务端注入的 webserver 实际监听地址 + 补充地址（局域网 / 独立端口）
+    const SERVER_BASE = ${jsHttpBase};
+    const EXTRA_BASES = ${jsExtraBases};
+    // 当前访问的完整 URL：浏览器 http(s) 访问时以真实访问地址为准；
+    // GUI 内嵌（dsh-app:// 等自定义协议 iframe）时 location.origin 不是可用的
+    // 访问地址，退回服务端注入的 webserver 监听地址
+    const IS_HTTP_PAGE = location.protocol === 'http:' || location.protocol === 'https:';
+    const FULL_BASE = IS_HTTP_PAGE ? (location.origin + BASE) : (SERVER_BASE || location.origin + BASE);
     const TOKEN_PATH = ${jsTokenPath};
     const TOKEN_KEY = 'dsh_admin_token';
     let TOKEN = localStorage.getItem(TOKEN_KEY) || '';
@@ -1007,12 +1028,37 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
       }
     }
 
+    // ---------- 服务地址（当前访问的完整 URL） ----------
+    function fillBaseUrl() {
+      const hdr = document.getElementById('hdrFullBase');
+      const box = document.getElementById('baseUrlBox');
+      const extras = document.getElementById('baseUrlExtras');
+      if (hdr) hdr.textContent = FULL_BASE;
+      if (box) box.textContent = FULL_BASE;
+      if (extras) {
+        const others = (EXTRA_BASES || []).filter(function (u) { return u && u !== FULL_BASE; });
+        if (others.length) {
+          extras.innerHTML = '局域网 / 独立端口访问：<br>' + others.map(function (u) {
+            return '<code class="inline">' + esc(u) + '</code>';
+          }).join('<br>');
+        }
+      }
+    }
+    async function copyBaseUrl() {
+      try {
+        await writeClipboard(FULL_BASE);
+        toast('已复制服务地址：' + FULL_BASE);
+      } catch (e) {
+        toast('复制失败，请手动选中复制');
+      }
+    }
+
     // ---------- curl ----------
     function renderCurl() {
       document.getElementById('curlBox').textContent =
-        'curl -H "Authorization: Bearer <key>" ' + BASE + '/system/status\\n\\n' +
+        'curl -H "Authorization: Bearer <key>" ' + FULL_BASE + '/system/status\\n\\n' +
         '# 或者使用 X-API-Key 头：\\n' +
-        'curl -H "X-API-Key: <key>" ' + BASE + '/system/status';
+        'curl -H "X-API-Key: <key>" ' + FULL_BASE + '/system/status';
     }
     function copyCurl() {
       navigator.clipboard.writeText(document.getElementById('curlBox').textContent)
@@ -1020,6 +1066,7 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
         .catch(function () { toast('复制失败，请手动选中复制'); });
     }
 
+    fillBaseUrl();
     boot();
   </script>
   <script>${EMBED_NAV_JS}</script>

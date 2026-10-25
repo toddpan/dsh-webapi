@@ -104,7 +104,10 @@ export function apply(ctx: Context, config: Config): void {
   registerSkillRoutes(ctx, router, config)
   registerUserQuestionBridge(ctx, router)
   registerOpenApiRoutes(router, config)
-  registerApiKeyRoutes(router, config, keyStore)
+  registerApiKeyRoutes(router, config, keyStore, {
+    // 页面每次渲染时解析主 webserver 实际监听端口（桌面端 GUI 端口随启动变化，不能固定）
+    getMainPort: () => (ctx.get('webServer') as any)?.port || 0,
+  })
 
   // 3. 挂载到 DSH 主 Web 服务器 (ctx.webServer)
   ctx.effect(() => {

@@ -27,6 +27,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { HttpRouter, sendJson } from './router.js'
 import { ApiKeyInputError, ApiKeyStore, FailureRateLimiter } from './api-keys-store.js'
 import { generateApiKeysHtml } from './api-keys-page.js'
+import { collectMachineIdentity } from './netinfo.js'
 import type { WebServiceConfig } from './types.js'
 
 const adminFailLimiter = new FailureRateLimiter(10, 60_000)
@@ -175,10 +176,20 @@ async function rejectAdmin(
   return false
 }
 
+export interface ApiKeyRouteOptions {
+  /**
+   * 解析主 webserver 实际监听端口（每次渲染页面时调用——桌面端 GUI 端口随启动变化，
+   * 不能在注册期固定）。页面据此注入 http://127.0.0.1:<port><prefix> 服务地址：
+   * GUI 内嵌在 dsh-app:// 等自定义协议 iframe 里，location.origin 不是可用的访问地址。
+   */
+  getMainPort?: () => number
+}
+
 export function registerApiKeyRoutes(
   router: HttpRouter,
   config: WebServiceConfig,
   store: ApiKeyStore,
+  options: ApiKeyRouteOptions = {},
 ): void {
   const prefix = config.pathPrefix || '/api/v1'
   const guardOpts: AdminGuardOptions = {
@@ -195,7 +206,23 @@ export function registerApiKeyRoutes(
       // 注入管理令牌文件的绝对路径，让令牌门直接给出可复制的 cat 命令；
       // embed=1 供 DSH GUI 侧边栏 iframe 使用（隐藏面包屑等导航冗余）
       const embed = query.embed === '1'
-      res.end(generateApiKeysHtml(prefix, store.adminTokenPath, embed))
+      // 注入真实 HTTP 服务地址（与 dsh_web_service_info 工具同一约定）：
+      // 主端口 + 局域网 IP / 独立端口作为补充展示
+      const mainPort = options.getMainPort?.() || 0
+      const httpBase = mainPort ? `http://127.0.0.1:${mainPort}${prefix}` : ''
+      const extras: string[] = []
+      if (config.standalonePort && config.standalonePort > 0) {
+        extras.push(`http://127.0.0.1:${config.standalonePort}${prefix}`)
+      }
+      if (mainPort) {
+        for (const ip of collectMachineIdentity().ips) {
+          if (ip.includes(':')) continue // 展示仅取 IPv4
+          const url = `http://${ip}:${mainPort}${prefix}`
+          if (!extras.includes(url)) extras.push(url)
+          if (extras.length >= 4) break
+        }
+      }
+      res.end(generateApiKeysHtml(prefix, store.adminTokenPath, embed, httpBase, extras))
     },
     { auth: 'public' },
   )
