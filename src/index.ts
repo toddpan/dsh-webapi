@@ -19,6 +19,7 @@ import { registerFileRoutes } from './files.js'
 import { registerFsRoutes } from './fs.js'
 import { registerSkillRoutes } from './skills.js'
 import { registerUserQuestionBridge } from './user-questions.js'
+import { registerCollaborationRoutes } from './collaboration.js'
 import { registerOpenApiRoutes } from './openapi.js'
 import { ApiKeyStore } from './api-keys-store.js'
 import { registerApiKeyRoutes } from './api-keys.js'
@@ -103,6 +104,7 @@ export function apply(ctx: Context, config: Config): void {
   registerFsRoutes(router, config)
   registerSkillRoutes(ctx, router, config)
   registerUserQuestionBridge(ctx, router)
+  registerCollaborationRoutes(ctx, router)
   registerOpenApiRoutes(router, config)
   registerApiKeyRoutes(router, config, keyStore, {
     // 页面每次渲染时解析主 webserver 实际监听端口（桌面端 GUI 端口随启动变化，不能固定）

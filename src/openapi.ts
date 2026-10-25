@@ -271,6 +271,98 @@ function generateOpenApiSpec(prefix: string) {
           responses: { 200: { description: '切换后的权限视图' }, 400: { description: '未知 preset' } },
         },
       },
+      '/sessions/{id}/goal': {
+        get: {
+          summary: '读取会话当前长期目标 (等价 /goal 查看)',
+          tags: ['Sessions'],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { 200: { description: '{ goal: GoalView | null }；含 id/revision/objective/phase/maxGoalRounds/roundsStarted' }, 409: { description: 'SESSION_NOT_LIVE：会话未在本进程加载' } },
+        },
+        post: {
+          summary: '创建并武装长期目标 (等价 /goal 设置)',
+          tags: ['Sessions'],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['objective'],
+                  properties: {
+                    objective: { type: 'string', description: '完成目标描述' },
+                    maxGoalRounds: { type: 'integer', description: '自动续跑轮数上限（正整数，缺省用宿主默认）' },
+                  },
+                },
+              },
+            },
+          },
+          responses: { 201: { description: '{ goal: GoalView }' }, 400: { description: '参数缺失' }, 409: { description: '已有未完成目标或状态冲突' } },
+        },
+        put: {
+          summary: '目标生命周期操作',
+          tags: ['Sessions'],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['action'],
+                  properties: {
+                    action: { type: 'string', description: 'edit | pause | resume | complete | blocked | clear | disarm' },
+                    objective: { type: 'string' },
+                    maxGoalRounds: { type: 'integer' },
+                    blockedReason: { type: 'object', properties: { code: { type: 'string' }, message: { type: 'string' } } },
+                    ref: { type: 'object', description: '缺省取当前目标；显式传 { id, revision } 做 CAS', properties: { id: { type: 'string' }, revision: { type: 'integer' } } },
+                  },
+                },
+              },
+            },
+          },
+          responses: { 200: { description: '{ goal } 或 clear 后 { goal: null, cleared }' }, 404: { description: 'GOAL_NOT_FOUND' }, 409: { description: '状态冲突 / SESSION_NOT_LIVE' } },
+        },
+      },
+      '/sessions/{id}/plan': {
+        get: {
+          summary: '查询计划模式状态',
+          tags: ['Sessions'],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { 200: { description: '{ active, pending }' }, 409: { description: 'SESSION_NOT_LIVE' } },
+        },
+        put: {
+          summary: '进入/退出计划模式 (等价 /plan 命令)',
+          tags: ['Sessions'],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['active'],
+                  properties: { active: { type: 'boolean' } },
+                },
+              },
+            },
+          },
+          responses: { 200: { description: '{ active, pending, transition: committed|queued|cancelled|noop }；queued 表示在下个步边界生效' }, 409: { description: 'SESSION_NOT_LIVE' } },
+        },
+      },
+      '/sessions/{id}/compact': {
+        post: {
+          summary: '手动压缩会话历史 (等价 /compact 命令)',
+          description: '要求会话空闲（无进行中的回合）。成功后历史被替换为摘要节点，上下文占用显著下降。',
+          tags: ['Sessions'],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: { description: '{ compacted: true, result } 或 { compacted: false }（无可压缩历史）' },
+            409: { description: 'COMPACTION_BUSY（压缩中或回合未结束）/ COMPACTION_CHANGED / COMPACTION_SUMMARY / COMPACTION_COMMIT / COMPACTION_PERSISTENCE / SESSION_NOT_LIVE' },
+            501: { description: '节点未装载 compaction 服务' },
+          },
+        },
+      },
       '/sessions/{id}/history': {
         get: {
           summary: '查询会话历史消息 (分页)',
