@@ -12,7 +12,13 @@
  *   删除      DELETE {prefix}/api-keys/:id             （仅限已吊销的 managed Key）
  *   鉴权开关  GET    {prefix}/api-keys/auth
  *   鉴权开关  PUT    {prefix}/api-keys/auth
- *
+ *   API 服务  GET    {prefix}/api-keys/service          （端口 + 监听范围 + 运行状态 + 可访问地址）
+ *   API 服务  POST   {prefix}/api-keys/service/start    （body: {port?, bindIp?}，启动/重绑）
+ *   API 服务  POST   {prefix}/api-keys/service/stop     （停止，保留端口与监听范围）
+ *   API 服务  GET    {prefix}/api-keys/service/free-port（建议一个空闲端口）
+ *   兼容      GET    {prefix}/api-keys/port             （= /api-keys/service）
+ *   兼容      PUT    {prefix}/api-keys/port             （旧客户端：fixedPort=0 停止，否则启动）
+  *
  * 注册顺序约束：字面量路由（/api-keys/auth）不得被参数路由（/api-keys/:id*）抢先匹配，
  * 新增路由时请保持「字面量优先」，或使用互不重叠的 method。
  *
@@ -27,6 +33,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { HttpRouter, sendJson } from './router.js'
 import { ApiKeyInputError, ApiKeyStore, FailureRateLimiter } from './api-keys-store.js'
 import { generateApiKeysHtml } from './api-keys-page.js'
+import type { BindIp, ServiceState } from './service-settings.js'
+import { BIND_IP_ALL, BIND_IP_LOOPBACK, normalizeBindIp } from './service-settings.js'
 import { collectMachineIdentity } from './netinfo.js'
 import type { WebServiceConfig } from './types.js'
 
@@ -183,6 +191,20 @@ export interface ApiKeyRouteOptions {
    * GUI 内嵌在 dsh-app:// 等自定义协议 iframe 里，location.origin 不是可用的访问地址。
    */
   getMainPort?: () => number
+  /** 独立 API 服务当前状态（设置页「API 服务」区块数据源） */
+  getServiceState?: () => ServiceState
+  /**
+   * 启动（或重绑）独立服务。port 省略 / 0 表示沿用已保存端口，从未分配过则自动分配；
+   * bindIp 仅接受 '127.0.0.1'（默认，仅本机）与 '0.0.0.0'（局域网可达）。
+   * 实现方负责：先试绑定、成功才落盘；重绑失败回滚原监听。
+   */
+  startService?: (
+    opts: { port?: number; bindIp?: BindIp },
+  ) => Promise<{ ok: true; message: string } | { ok: false; error: string }>
+  /** 停止独立服务（保留端口与监听范围，下次启动 DSH 不自动拉起） */
+  stopService?: () => Promise<{ ok: true; message: string }>
+  /** 建议一个空闲端口（设置页「自动」按钮） */
+  suggestPort?: (bindIp?: BindIp) => Promise<number>
 }
 
 export function registerApiKeyRoutes(
@@ -210,19 +232,26 @@ export function registerApiKeyRoutes(
       // 主端口 + 局域网 IP / 独立端口作为补充展示
       const mainPort = options.getMainPort?.() || 0
       const httpBase = mainPort ? `http://127.0.0.1:${mainPort}${prefix}` : ''
+      const service = options.getServiceState?.()
+      // 主 webserver 的局域网地址只作备用；独立服务地址单独注入，页面按运行状态动态展示
       const extras: string[] = []
-      if (config.standalonePort && config.standalonePort > 0) {
-        extras.push(`http://127.0.0.1:${config.standalonePort}${prefix}`)
-      }
       if (mainPort) {
         for (const ip of collectMachineIdentity().ips) {
           if (ip.includes(':')) continue // 展示仅取 IPv4
           const url = `http://${ip}:${mainPort}${prefix}`
           if (!extras.includes(url)) extras.push(url)
-          if (extras.length >= 4) break
+          if (extras.length >= 3) break
         }
       }
-      res.end(generateApiKeysHtml(prefix, store.adminTokenPath, embed, httpBase, extras))
+      res.end(generateApiKeysHtml({
+        prefix,
+        adminTokenPath: store.adminTokenPath,
+        embed,
+        httpBase,
+        extraBases: extras,
+        serviceUrls: service?.urls || [],
+        serviceRunning: !!service?.running,
+      }))
     },
     { auth: 'public' },
   )
@@ -287,6 +316,145 @@ export function registerApiKeyRoutes(
   }, { auth: 'admin' })
 
   // ---------- 改名 / 过期 ----------
+  // ---------- 独立 API 服务（端口 / 监听范围 / 启停） ----------
+  // 字面量路由：必须先于 /api-keys/:id* 注册（见文件头注册顺序约束）
+  const fallbackState = (): ServiceState => ({
+    running: false,
+    port: config.standalonePort || 0,
+    bindIp: BIND_IP_LOOPBACK,
+    listeningPort: 0,
+    mainPort: options.getMainPort?.() || 0,
+    lanIps: [],
+    urls: [],
+    exposedToLan: false,
+    autoStart: true,
+  })
+  const serviceState = (): ServiceState => options.getServiceState?.() || fallbackState()
+  const parseBindIp = (raw: unknown): BindIp | null => normalizeBindIp(raw)
+  const portIsValid = (raw: unknown): boolean =>
+    typeof raw === 'number' && Number.isInteger(raw) && (raw === 0 || (raw >= 1024 && raw <= 65535))
+
+  router.get('/api-keys/service', async (req: IncomingMessage, res: ServerResponse) => {
+    if (await rejectAdmin(req, res, store, guardOpts)) return
+    sendJson(res, 200, { ok: true, data: serviceState() })
+  }, { auth: 'admin' })
+
+  // 启动/重绑：body { port?: number, bindIp?: '127.0.0.1'|'0.0.0.0' }（都可省略）
+  router.post('/api-keys/service/start', async (req: IncomingMessage, res: ServerResponse, _p, _q, body) => {
+    if (await rejectAdmin(req, res, store, guardOpts)) return
+    if (!options.startService) {
+      sendJson(res, 501, { ok: false, error: '当前运行环境不支持动态启停监听端口', code: 'NOT_SUPPORTED' })
+      return
+    }
+    const patch = body && typeof body === 'object' ? body as Record<string, unknown> : {}
+    const opts: { port?: number; bindIp?: BindIp } = {}
+    if (patch.port !== undefined && patch.port !== null) {
+      if (!portIsValid(patch.port)) {
+        sendJson(res, 400, { ok: false, error: 'port 必须是 1024-65535 的整数', code: 'BAD_REQUEST' })
+        return
+      }
+      opts.port = patch.port as number
+    }
+    if (patch.bindIp !== undefined && patch.bindIp !== null) {
+      const bindIp = parseBindIp(patch.bindIp)
+      if (!bindIp) {
+        sendJson(res, 400, {
+          ok: false,
+          error: `bindIp 仅支持 ${BIND_IP_LOOPBACK}（仅本机可达）或 ${BIND_IP_ALL}（局域网可达）`,
+          code: 'BAD_REQUEST',
+        })
+        return
+      }
+      opts.bindIp = bindIp
+    }
+    const result = await options.startService(opts)
+    if (!result.ok) {
+      // 失败时现状不变（实现方已回滚原监听），错误文案可直接展示
+      sendJson(res, 409, { ok: false, error: result.error, code: 'SERVICE_START_FAILED' })
+      return
+    }
+    sendJson(res, 200, { ok: true, data: { ...serviceState(), message: result.message } })
+  }, { auth: 'admin' })
+
+  // 停止：保留端口与监听范围，只清除「期望运行」状态
+  router.post('/api-keys/service/stop', async (req: IncomingMessage, res: ServerResponse) => {
+    if (await rejectAdmin(req, res, store, guardOpts)) return
+    if (!options.stopService) {
+      sendJson(res, 501, { ok: false, error: '当前运行环境不支持动态启停监听端口', code: 'NOT_SUPPORTED' })
+      return
+    }
+    const result = await options.stopService()
+    sendJson(res, 200, { ok: true, data: { ...serviceState(), message: result.message } })
+  }, { auth: 'admin' })
+
+  // 建议空闲端口（设置页「自动」按钮）
+  router.get('/api-keys/service/free-port', async (req: IncomingMessage, res: ServerResponse) => {
+    if (await rejectAdmin(req, res, store, guardOpts)) return
+    if (!options.suggestPort) {
+      sendJson(res, 501, { ok: false, error: '当前运行环境不支持端口探测', code: 'NOT_SUPPORTED' })
+      return
+    }
+    const port = await options.suggestPort(serviceState().bindIp)
+    sendJson(res, 200, { ok: true, data: { port } })
+  }, { auth: 'admin' })
+
+  // ---------- 兼容旧客户端：/api-keys/port ----------
+  // GET 等价 /api-keys/service；PUT 等价「fixedPort>0 → 启动；fixedPort=0 → 停止」
+  router.get('/api-keys/port', async (req: IncomingMessage, res: ServerResponse) => {
+    if (await rejectAdmin(req, res, store, guardOpts)) return
+    sendJson(res, 200, { ok: true, data: serviceState() })
+  }, { auth: 'admin' })
+
+  router.put('/api-keys/port', async (req: IncomingMessage, res: ServerResponse, _p, _q, body) => {
+    if (await rejectAdmin(req, res, store, guardOpts)) return
+    if (!options.startService || !options.stopService) {
+      sendJson(res, 501, { ok: false, error: '当前运行环境不支持动态启停监听端口', code: 'NOT_SUPPORTED' })
+      return
+    }
+    const patch = body && typeof body === 'object' ? body as Record<string, unknown> : {}
+    const hasPort = patch.fixedPort !== undefined && patch.fixedPort !== null
+    const hasBindIp = patch.bindIp !== undefined && patch.bindIp !== null
+    if (!hasPort && !hasBindIp) {
+      sendJson(res, 400, {
+        ok: false,
+        error: '请求体需提供 fixedPort（1024-65535 的整数，或 0 停止服务）和/或 bindIp（127.0.0.1 或 0.0.0.0）',
+        code: 'BAD_REQUEST',
+      })
+      return
+    }
+    const bindIp = hasBindIp ? parseBindIp(patch.bindIp) : undefined
+    if (hasBindIp && !bindIp) {
+      sendJson(res, 400, {
+        ok: false,
+        error: `bindIp 仅支持 ${BIND_IP_LOOPBACK}（仅本机可达）或 ${BIND_IP_ALL}（局域网可达）`,
+        code: 'BAD_REQUEST',
+      })
+      return
+    }
+    if (hasPort && !portIsValid(patch.fixedPort)) {
+      sendJson(res, 400, {
+        ok: false,
+        error: 'fixedPort 必须是 1024-65535 的整数，或 0（停止服务）',
+        code: 'BAD_REQUEST',
+      })
+      return
+    }
+    if (hasPort && patch.fixedPort === 0) {
+      const result = await options.stopService()
+      sendJson(res, 200, { ok: true, data: { ...serviceState(), message: result.message } })
+      return
+    }
+    const result = await options.startService({
+      port: hasPort ? patch.fixedPort as number : undefined,
+      bindIp: bindIp || undefined,
+    })
+    if (!result.ok) {
+      sendJson(res, 409, { ok: false, error: result.error, code: 'SERVICE_START_FAILED' })
+      return
+    }
+    sendJson(res, 200, { ok: true, data: { ...serviceState(), message: result.message } })
+  }, { auth: 'admin' })
+
   router.patch('/api-keys/:id', async (req: IncomingMessage, res: ServerResponse, params, _q, body) => {
     if (await rejectAdmin(req, res, store, guardOpts)) return
     const bad = validateInput(body)

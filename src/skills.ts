@@ -1,7 +1,7 @@
 /**
  * dsh-web-service - Skill 管理 API
  *
- * 提供远端 DSH 技能全生命周期管理（供 onenat-workbuddy「技能中心」消费）：
+ * 提供远端 DSH 技能全生命周期管理（供三方控制台「技能中心」消费）：
  *   GET    /skills                列表（管理视图：见全部，含 root/path）
  *   GET    /skills/:name          单技能详情（含全文，供预览）
  *   GET    /skills/:name/body     原始 SKILL.md 全文（下载/预览）

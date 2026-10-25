@@ -4,3 +4,9 @@ node_modules/
 *.tsbuildinfo
 *.tgz
 *.bak-*
+
+# 本地工具产物 / 临时资料（不入库）
+.dsh-vision-router/
+.v2c/
+.video_agent/
+onenat-skill.md

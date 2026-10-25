@@ -154,8 +154,13 @@ export interface WebServiceConfig {
   pathPrefix?: string
   /** 鉴权 Token，若为空则不鉴权 */
   apiKey?: string
-  /** 独立监听 HTTP 端口，默认为 0（仅挂载主 webserver）；若 >0 则额外独立监听 */
+  /** 首次安装时的初始独立监听端口（0 = 自动分配，31800 起）；之后由设置页管理 */
   standalonePort?: number
+  /**
+   * 首次安装时的初始监听范围：'127.0.0.1'（默认，仅本机可达）或 '0.0.0.0'（局域网可达）。
+   * 仅接受这两个值（schemastery 配置层已强校验）；之后由设置页管理。
+   */
+  standaloneBindIp?: '127.0.0.1' | '0.0.0.0'
   /** 是否开启 CORS，默认 true */
   cors?: boolean
   /** 默认工作空间目录，默认 process.cwd() */

@@ -106,7 +106,7 @@ try {
   const page = await fetch(`http://127.0.0.1:${server.address().port}${PREFIX}/settings/api-keys`)
   const html = await page.text()
   check('设置页 HTML 公开可访问', page.status === 200)
-  check('设置页含密钥管理入口', html.includes('API Key 管理') && html.includes('新建 API Key'))
+  check('设置页含密钥管理入口', html.includes('API 服务与密钥') && html.includes('新建 API Key'))
   check('设置页含「设置 API Key」表单（随机/自定义二选一）',
     html.includes('使用自定义 Key（粘贴已有 Key）') &&
     html.includes('随机生成（推荐 · 256 位熵）') &&

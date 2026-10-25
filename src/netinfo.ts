@@ -67,3 +67,11 @@ export function collectMachineIdentity(): MachineIdentity {
     interfaces,
   }
 }
+
+/**
+ * 本机局域网 IPv4 列表（非回环、非 internal、去重，按网卡枚举顺序）。
+ * 供 bindIp=0.0.0.0 时生成 serviceUrls（http://<ip>:<port><prefix>）。
+ */
+export function collectLanIpv4(): string[] {
+  return collectMachineIdentity().ips.filter((ip) => !ip.includes(':'))
+}

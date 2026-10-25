@@ -8,25 +8,36 @@ whenToUse: 用户要求通过 HTTP/REST API 调用 DSH、集成三方系统、�
 
 本机 DSH 已由插件 `dsh-web-service` 暴露为 Web Service。所有能力通过 HTTP 访问，第三方系统、脚本或任何 OpenAI SDK 均可直接调用。
 
-## 服务地址（按访问路径二选一）
+## 服务地址
+
+插件提供**独立固定端口服务**（首次安装自动分配，从 31800 起找空闲端口），Base URL 以设置页
+「API 服务」卡片显示的地址为准；也可从 `GET <Base>/system/status` 的 `data.standalonePort`
+取得端口。DSH 主 webserver 端口每次启动都会变化，**不要写死**。
 
 | 访问路径 | Base URL |
 |---|---|
-| DSH 本机 / 同内网 | `http://127.0.0.1:3080/api/v1`（DSH 主 webserver 端口，默认 3080） |
-| **经 oneNat 隧道** | `http://<隧道host>:<映射public_port>/api/v1` —— 从 oneNat `/api/v1/resources` 里找 `local=127.0.0.1:3080` 的映射，取其 `public_url` 的 host:port 替换即可；tcp 转发可直接承载 HTTP，路径不变 |
+| 本机（独立服务运行中） | `http://127.0.0.1:<standalonePort>/api/v1` |
+| 同局域网（监听范围 0.0.0.0 时） | `http://<本机局域网 IP>:<standalonePort>/api/v1` |
+| 经内网穿透 / 反向代理 | `http://<代理 host>:<对外端口>/api/v1`（代理指向独立固定端口，路径不变） |
+
+下文示例用 `$BASE` 表示 Base URL，执行前先设置：
+
+```bash
+BASE=http://127.0.0.1:<standalonePort>/api/v1   # 端口以设置页「API 服务」显示为准
+```
 
 - **交互式文档**：`<Base>/docs`
 - **OpenAPI 规范**：`<Base>/openapi.json`
 - **鉴权**：若部署时配置了 `apiKey`，请求需带 `Authorization: Bearer <key>` 或 `X-API-Key: <key>` 头；未配置则免鉴权。
 - **CORS**：默认开启。
-- **离线判断**：经隧道访问前先看该映射 `online`；离线则直接报告，不要请求。
+- **离线判断**：经代理 / 隧道访问前先探一次 `system/status`；连不上就直接报告，不要循环重试。
 - **节点身份判定**：`GET <Base>/ping` 返回 DSH 所在机器的 IP/MAC 指纹；natpass 等隧道把远端 DSH 映射成 `127.0.0.1:port` 时，用它判定该「127.0.0.1 节点」是不是本机（见下节）。
 
 快速自检：
 
 ```bash
-curl -s http://127.0.0.1:3080/api/v1/system/status          # 本机
-curl -s http://<隧道host>:<public_port>/api/v1/system/status # 经隧道
+curl -s http://127.0.0.1:<standalonePort>/api/v1/system/status   # 本机
+curl -s http://<代理 host>:<对外端口>/api/v1/system/status        # 经代理
 ```
 
 ### 机器指纹判定（127.0.0.1 节点是否本机）
@@ -34,7 +45,7 @@ curl -s http://<隧道host>:<public_port>/api/v1/system/status # 经隧道
 natpass 等隧道会把远端 DSH 映射成本机 `127.0.0.1:port`，单看地址无法区分「本地 DSH」与「隧道进来的远端 DSH」。`GET /ping` 返回机器指纹，比对即可判定：
 
 ```bash
-curl -s http://127.0.0.1:3080/api/v1/ping
+curl -s $BASE/ping
 # data: { hostname, platform, arch, ips[], macs[], interfaces[], hint }
 ```
 
@@ -69,7 +80,7 @@ HTTP 状态码：`200` 成功、`201` 创建成功、`400` 参数错误、`401` 
 ```bash
 # 添加工作区（目录须已存在，否则先 mkdir）
 mkdir -p /tmp/my-project
-curl -s -X POST http://127.0.0.1:3080/api/v1/workspaces \
+curl -s -X POST $BASE/workspaces \
   -H "Content-Type: application/json" \
   -d '{"path": "/tmp/my-project", "title": "我的项目"}'
 ```
@@ -95,17 +106,17 @@ curl -s -X POST http://127.0.0.1:3080/api/v1/workspaces \
 
 ```bash
 # multipart 多文件
-curl -X POST http://127.0.0.1:3080/api/v1/sessions/$SID/files \
+curl -X POST $BASE/sessions/$SID/files \
   -F "files=@./报告.pdf" -F "files=@./data.csv"
 # 原始字节流 + 文件名
-curl -X POST "http://127.0.0.1:3080/api/v1/sessions/$SID/files?filename=dump.bin" \
+curl -X POST "$BASE/sessions/$SID/files?filename=dump.bin" \
   -H "Content-Type: application/octet-stream" --data-binary @./dump.bin
 ```
 
 上传后把返回的 `path` 写进对话，会话中的 AI 即可用文件工具（fs/shell）直接读取。上限默认 2GB（配置 `maxUploadBytes`）；**大文件（>64MB）建议走分片断点续传**，避免服务端整包缓冲：`POST /sessions/:id/files/resumable?name=&size=` 拿 `uploadId` → `PUT /sessions/:id/files/resumable/:uploadId?offset=<已传字节>` 顺序追加分片（建议 4MB/片，409 时按返回的 `received` 对账）→ `POST /sessions/:id/files/resumable/:uploadId/complete` 落盘，返回与整包上传完全一致的 `files` 形状。
 
 ```bash
-SID=$(curl -s -X POST http://127.0.0.1:3080/api/v1/sessions \
+SID=$(curl -s -X POST $BASE/sessions \
   -H "Content-Type: application/json" \
   -d '{"title": "测试", "cwd": "/tmp/my-project"}' | python3 -c "import json,sys;print(json.load(sys.stdin)['data']['sessionId'])")
 ```
@@ -151,7 +162,7 @@ SID=$(curl -s -X POST http://127.0.0.1:3080/api/v1/sessions \
 | `error` | `{message}` | 出错 |
 
 ```bash
-curl -N -X POST http://127.0.0.1:3080/api/v1/sessions/$SID/prompt-stream \
+curl -N -X POST $BASE/sessions/$SID/prompt-stream \
   -H "Content-Type: application/json" \
   -d '{"prompt": "介绍一下你自己"}'
 ```
@@ -164,12 +175,12 @@ curl -N -X POST http://127.0.0.1:3080/api/v1/sessions/$SID/prompt-stream \
 
 ```bash
 # 非流式
-curl -s -X POST http://127.0.0.1:3080/api/v1/chat/completions \
+curl -s -X POST $BASE/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "PONG测试"}]}'
 
 # 流式（SSE chunks，以 data: [DONE] 结束）
-curl -N -X POST http://127.0.0.1:3080/api/v1/chat/completions \
+curl -N -X POST $BASE/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "你好"}], "stream": true}'
 ```
@@ -182,7 +193,7 @@ OpenAI Python SDK 用法：
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:3080/api/v1", api_key="none")
+client = OpenAI(base_url="$BASE", api_key="none")
 r = client.chat.completions.create(model="none", messages=[{"role": "user", "content": "你好"}])
 print(r.choices[0].message.content)
 ```
@@ -200,8 +211,8 @@ print(r.choices[0].message.content)
 
 | 现象 | 处理 |
 |---|---|
-| 连接拒绝 | DSH 未启动或端口非 3080；先查 `system/status` |
-| 经隧道超时/拒绝 | 隧道离线：查 oneNat resources 里该映射 `online`，离线报告用户，不要重试 |
+| 连接拒绝 | 独立 API 服务已停止或端口不对：先看设置页「API 服务」状态，或查 `system/status` |
+| 经代理超时/拒绝 | 代理或隧道离线：报告用户，不要循环重试 |
 | 401 | 配置了 `apiKey`；请求带 `Authorization: Bearer <key>` |
 | 模型选择报 no adapter | `provider/model` 非法；先 `GET /models` 校验 |
 | 新会话模型不对 | 全局默认被改过；查 `GET /models/default`，或创建时显式传 `provider/model` |

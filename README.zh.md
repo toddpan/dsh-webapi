@@ -10,8 +10,8 @@ REST 接口与 SSE 流，再加一个 OpenAI 兼容的 `/chat/completions`，现
 典型用法：给 DSH 做一个自托管控制台、桌面或移动端客户端、驱动 Agent 的 CI/自动化流程、
 把 DSH 当成工具调用的其它 Agent，或在 DSH 前面再包一层自己的 API 网关。
 
-- **零新增依赖**：插件只 `inject` `webServer` 与 `tools`，路由挂在 DSH 宿主的 webserver 上（也可选独立端口）。
-- **60 条路由**（REST + SSE），内置 OpenAPI 3.0 规范、在线调试页与 API Key 设置页。
+- **零新增依赖**：插件只 `inject` `webServer` 与 `tools`，路由挂在 DSH 宿主的 webserver 上，并可另开一个可随时启停的独立固定端口服务。
+- **80+ 条路由**（REST + SSE），内置 OpenAPI 3.0 规范、在线调试页，以及可启停独立 API 服务的设置页。
 - **自带 SKILL**：`skills/dsh-web-service/SKILL.md` 教会 DSH 里的 Agent 调用本 API（流式、中止、
   回答挂起问题、上传文件等）。
 
@@ -65,7 +65,8 @@ dsh plugin --profile web add "$PWD"
 |---|---|---|
 | `pathPrefix` | `/api/v1` | 路由前缀 |
 | `apiKey` | `''` | 非空则开启鉴权，请求需带该 key |
-| `standalonePort` | `0` | `>0` 时额外独立监听端口；`0` 表示只挂主 webserver |
+| `standalonePort` | `0` | **首次安装**时的初始端口；`0` = 自动分配（31800-31899）。分配后以设置页为准，配置不再覆盖 |
+| `standaloneBindIp` | `127.0.0.1` | **首次安装**时的初始监听范围：`127.0.0.1`（仅本机）或 `0.0.0.0`（局域网可达）；之后以设置页为准 |
 | `cors` | `true` | 是否允许跨域 |
 | `defaultCwd` | `''` | 默认工作目录，留空取 `process.cwd()` |
 | `maxUploadBytes` | `2 GiB` | 上传大小上限，大文件建议走分片接口 |
@@ -74,16 +75,40 @@ dsh plugin --profile web add "$PWD"
 > `apiKey` 只是「遗留单 Key」，向后兼容用。日常管理请到设置页生成/吊销多条 Key，详见
 > [API Key 管理](#api-key-管理设置页)。
 
+## API 服务（独立固定端口）
+
+插件自带一个独立的 HTTP 服务，与 DSH 主 webserver 解耦——主端口每次启动都会变，
+独立服务端口固定，适合写进三方客户端、脚本或反向代理。
+
+- **首次安装自动分配端口**：从 31800 起找空闲端口，分配后固定不变。
+- **在设置页启停**：`GET /api/v1/settings/api-keys` → 「API 服务」卡片；端口与监听范围
+  （`127.0.0.1` 仅本机 / `0.0.0.0` 局域网）随时可改，即时生效、无需重启 DSH。
+- **API 地址实时显示**：改端口或监听范围时，地址区随表单实时预览；运行中显示真实地址，可一键复制。
+- **状态持久化**：运行中的服务在 DSH 重启后自动恢复同一端口；停止后重启 DSH 仍保持停止。
+
+设置文件：`<DSH_HOME>/dsh-web-service/service-settings.json`（0600）。旧版 `fixedPort`
+格式会在读取时自动迁移。
+
+| 操作 | 接口（管理令牌鉴权） |
+|---|---|
+| 读取状态 | `GET /api/v1/api-keys/service` |
+| 启动 / 换端口 / 换监听范围 | `POST /api/v1/api-keys/service/start` `{ "port": 31800, "bindIp": "127.0.0.1" }` |
+| 停止 | `POST /api/v1/api-keys/service/stop` |
+| 建议空闲端口 | `GET /api/v1/api-keys/service/free-port` |
+| 旧版兼容 | `GET / PUT /api/v1/api-keys/port`（`fixedPort: 0` 表示停止） |
+
+启动绑定失败（端口被占用等）返回 `409`，原监听回滚，现状不变。
+
 ## API Key 管理（设置页）
 
-打开 **`GET /api/v1/settings/api-keys`** 即可在一个页面里管理三方调用鉴权的密钥：
+打开 **`GET /api/v1/settings/api-keys`** 即可在一个页面里管理独立 API 服务与三方调用鉴权的密钥：
 查看（脱敏）、新建、轮换、吊销、开启/关闭鉴权。`/docs` 页头部也有「管理 API Key」入口。
 
 **三个入口**
 
 | 入口 | 说明 |
 |---|---|
-| DSH Web GUI 侧边栏「API Key 管理」 | 插件自带浏览器半边（client half），装好并重启 DSH 后出现在侧边栏，内嵌本页 |
+| DSH Web GUI 侧边栏「API 服务」 | 插件自带浏览器半边（client half），装好并重启 DSH 后出现在侧边栏，内嵌本页 |
 | `GET /api/v1/settings/api-keys` | 独立页面，可直接收藏 |
 | `/docs` 页头「管理 API Key」按钮 | 从 API 文档一键跳转 |
 
@@ -177,8 +202,9 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
    - OpenAPI 3.0 规范：`GET /api/v1/openapi.json`
 7. **交互式会话**：读取挂起的 `ask_user_question` 问题并经 REST 作答、中止正在跑的轮次、
    上传/列出/下载工作区文件（含分片续传上传）。
-8. **API Key 设置页与密钥管理**：`GET /api/v1/settings/api-keys` 一页管理三方调用密钥——
-   多 Key 并存可命名、脱敏展示、新建/轮换/吊销、列表一键复制、开启关闭鉴权；落盘存哈希 + 管理令牌加密的密文。
+8. **API 服务与密钥设置页**：`GET /api/v1/settings/api-keys` 一页管理独立服务的启停/端口/监听范围
+   （地址实时预览）与三方调用密钥——多 Key 并存可命名、脱敏展示、新建/轮换/吊销、列表一键复制、
+   开启关闭鉴权；落盘存哈希 + 管理令牌加密的密文。
 
 ## API 路由汇总
 
@@ -220,7 +246,12 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
 | | `GET` | `/presets` | 查询可用 Agent Preset 清单 |
 | **Settings** | `GET` | `/settings` | 获取系统设置配置命名空间 |
 | | `PATCH` | `/settings/:namespace` | 更新指定命名空间配置 |
-| **API Keys** | `GET` | `/settings/api-keys` | **API Key 设置页**（HTML，公开；数据接口需 Admin Token） |
+| **API Service** | `GET` | `/api-keys/service` | 独立服务状态（运行中 / 端口 / 监听范围 / 可访问地址） |
+| | `POST` | `/api-keys/service/start` | 启动或换端口、换监听范围（即时生效，失败回滚） |
+| | `POST` | `/api-keys/service/stop` | 停止（保留端口，下次 DSH 启动不自动拉起） |
+| | `GET` | `/api-keys/service/free-port` | 建议一个空闲端口 |
+| | `GET` / `PUT` | `/api-keys/port` | 旧版兼容（`fixedPort: 0` 停止） |
+| **API Keys** | `GET` | `/settings/api-keys` | **API 服务与密钥设置页**（HTML，公开；数据接口需 Admin Token） |
 | | `GET` | `/api-keys` | 列出 API Key（脱敏，不含明文/哈希） |
 | | `POST` | `/api-keys` | 新建 API Key（返回明文，之后可随时复制） |
 | | `PATCH` | `/api-keys/:id` | 修改名称 / 备注 / 过期时间 |

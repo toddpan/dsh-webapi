@@ -11,4 +11,4 @@ export declare const inject: string[];
 export interface Config extends WebServiceConfig {
 }
 export declare const Config: z<Config>;
-export declare function apply(ctx: Context, config: Config): void;
+export declare function apply(ctx: Context, config: Config): Promise<void>;

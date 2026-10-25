@@ -10,8 +10,8 @@ Typical uses: a self-hosted console for DSH, a desktop or mobile client, CI / au
 an agent, a non-DSH agent that calls DSH as a tool, or a gateway that puts DSH behind your own API.
 
 - **No new dependencies** — the plugin only `inject`s `webServer` and `tools`; the routes ride on the
-  DSH host webserver (or an optional standalone port).
-- **60 routes** (REST + SSE), documented by a built-in OpenAPI 3.0 spec and a request page, plus an API Key settings page.
+  DSH host webserver, plus an independent fixed-port service you can start and stop on demand.
+- **80+ routes** (REST + SSE), documented by a built-in OpenAPI 3.0 spec and a request page, plus a settings page that starts/stops the independent API service and manages API keys.
 - **Bilingual skill included** — `skills/dsh-web-service/SKILL.md` teaches a DSH agent how to drive
   the API (streaming, cancelling, answering pending questions, file uploads).
 
@@ -68,7 +68,8 @@ All fields are optional; they live in the plugin row's `config` in your profile 
 |---|---|---|
 | `pathPrefix` | `/api/v1` | Route prefix |
 | `apiKey` | `''` | Non-empty enables auth; requests must carry this key |
-| `standalonePort` | `0` | `>0` also listens on its own port; `0` means host webserver only |
+| `standalonePort` | `0` | Initial port **on first install**; `0` auto-allocates one (31800-31899). Once assigned, the settings page owns it |
+| `standaloneBindIp` | `127.0.0.1` | Initial bind range **on first install**: `127.0.0.1` (local only) or `0.0.0.0` (LAN reachable); the settings page owns it afterwards |
 | `cors` | `true` | Allow cross-origin requests |
 | `defaultCwd` | `''` | Default working directory; empty means `process.cwd()` |
 | `maxUploadBytes` | `2 GiB` | Upload size limit; use the chunked endpoints for bigger files |
@@ -77,9 +78,37 @@ All fields are optional; they live in the plugin row's `config` in your profile 
 > `apiKey` is only a **legacy single key**, kept for backward compatibility. Manage keys from the
 > settings page instead — see [API Key management](#api-key-management-settings-page).
 
+## API service (independent fixed port)
+
+The plugin runs its own HTTP service, decoupled from the DSH host webserver: the host port changes
+on every launch, while this port stays fixed for clients, scripts and reverse proxies.
+
+- **A port is allocated on first install** — the first free port from 31800, then it never drifts.
+- **Start and stop from the settings page** — `GET /api/v1/settings/api-keys` → the "API 服务" card.
+  Port and bind range (`127.0.0.1` local only / `0.0.0.0` LAN) apply immediately, no DSH restart.
+- **Live API URL** — the address follows the form as you type a port or switch the range; while
+  running it shows the real address and copies with one click.
+- **Persistent intent** — a running service comes back on the same port after a DSH restart; one you
+  stopped stays stopped.
+
+State lives in `<DSH_HOME>/dsh-web-service/service-settings.json` (0600); the legacy `fixedPort`
+format is migrated on read.
+
+| Action | Endpoint (admin token) |
+|---|---|
+| Read state | `GET /api/v1/api-keys/service` |
+| Start / change port / bind range | `POST /api/v1/api-keys/service/start` `{ "port": 31800, "bindIp": "127.0.0.1" }` |
+| Stop | `POST /api/v1/api-keys/service/stop` |
+| Suggest a free port | `GET /api/v1/api-keys/service/free-port` |
+| Legacy compatibility | `GET / PUT /api/v1/api-keys/port` (`fixedPort: 0` stops) |
+
+A failed bind (port in use, …) returns `409` and rolls back to the previous listener, so the current
+state is unchanged.
+
 ## API Key management (settings page)
 
-Open **`GET /api/v1/settings/api-keys`** to manage the keys third parties use to call the API:
+Open **`GET /api/v1/settings/api-keys`** to manage the independent API service and the keys
+third parties use to call the API:
 view (masked), create, rotate, revoke, and turn authentication on or off. The `/docs` page also
 links to it from its header.
 
@@ -87,7 +116,7 @@ links to it from its header.
 
 | Entry | Notes |
 |---|---|
-| "API Key 管理" in the DSH Web GUI sidebar | The plugin ships a browser half (client half); after a DSH restart the panel appears in the sidebar and embeds this page |
+| "API 服务" in the DSH Web GUI sidebar | The plugin ships a browser half (client half); after a DSH restart the panel appears in the sidebar and embeds this page |
 | `GET /api/v1/settings/api-keys` | The standalone page — bookmarkable |
 | "管理 API Key" button on `/docs` | One click from the API docs |
 
@@ -190,8 +219,9 @@ The store lives at `<DSH_HOME>/dsh-web-service/api-keys.json` (mode 0600).
    `GET /api/v1/openapi.json`.
 7. **Interactive sessions** — read pending `ask_user_question` batches and answer them over REST, cancel
    a running turn, upload/list/download workspace files (including resumable chunked upload).
-8. **API Key settings page** — `GET /api/v1/settings/api-keys` manages third-party access keys in one
-   place: multiple named keys, masked display, create / rotate / revoke, and an auth on/off switch.
+8. **API service & key settings page** — `GET /api/v1/settings/api-keys` starts/stops the independent
+   service, edits its port and bind range (with a live URL preview), and manages third-party access
+   keys: multiple named keys, masked display, create / rotate / revoke, and an auth on/off switch.
    Hashes plus an admin-token-encrypted sealed copy are persisted.
 
 ## API routes
@@ -234,7 +264,12 @@ Default prefix: `/api/v1`
 | | `GET` | `/presets` | Available agent presets |
 | **Settings** | `GET` | `/settings` | Settings namespaces |
 | | `PATCH` | `/settings/:namespace` | Update one namespace |
-| **API Keys** | `GET` | `/settings/api-keys` | **API Key settings page** (HTML, public; data endpoints need the Admin Token) |
+| **API Service** | `GET` | `/api-keys/service` | Independent service state (running / port / bind range / reachable URLs) |
+| | `POST` | `/api-keys/service/start` | Start, or change port / bind range (instant, rolls back on failure) |
+| | `POST` | `/api-keys/service/stop` | Stop (keeps the port; does not auto-start after a DSH restart) |
+| | `GET` | `/api-keys/service/free-port` | Suggest a free port |
+| | `GET` / `PUT` | `/api-keys/port` | Legacy compatibility (`fixedPort: 0` stops) |
+| **API Keys** | `GET` | `/settings/api-keys` | **API service & key settings page** (HTML, public; data endpoints need the Admin Token) |
 | | `GET` | `/api-keys` | List API keys (masked; never returns plaintext or hashes) |
 | | `POST` | `/api-keys` | Create an API key (plaintext returned; copyable later) |
 | | `PATCH` | `/api-keys/:id` | Update name / note / expiry |

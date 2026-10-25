@@ -44,7 +44,32 @@ const SYNC_ICON =
 const SWAGGER_ICON =
   '<svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" aria-hidden="true" style="flex:0 0 auto;"><path d="m11.28 3.22 4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734L13.94 8l-3.72-3.72a.749.749 0 0 1 .326-1.275.749.749 0 0 1 .734.215Zm-6.56 0a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L2.06 8l3.72 3.72a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L.47 8.53a.75.75 0 0 1 0-1.06Z"/></svg>'
 
-export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed = false, httpBase = '', extraBases: string[] = []): string {
+export interface ApiKeysPageOptions {
+  /** API 路由前缀，如 /api/v1 */
+  prefix: string
+  /** 管理令牌文件绝对路径（令牌门给出 cat 命令） */
+  adminTokenPath?: string
+  /** GUI 侧边栏内嵌模式 */
+  embed?: boolean
+  /** 主 webserver 的 HTTP 地址（GUI 内嵌在自定义协议 iframe 里时 location.origin 不可用） */
+  httpBase?: string
+  /** 主 webserver 的其他可用地址（局域网） */
+  extraBases?: string[]
+  /** 独立 API 服务当前可访问地址（运行中才有值） */
+  serviceUrls?: string[]
+  /** 独立 API 服务是否运行中 */
+  serviceRunning?: boolean
+}
+
+export function generateApiKeysHtml(options: ApiKeysPageOptions): string {
+  const {
+    prefix,
+    adminTokenPath = '',
+    embed = false,
+    httpBase = '',
+    extraBases = [],
+    serviceUrls = [],
+  } = options
   // 两种语境分开转义：HTML 文本/属性用实体转义，JS 字符串字面量用 JSON.stringify（script 内容不做实体解码）
   const base = escapeHtml(prefix)
   const jsBase = JSON.stringify(prefix)
@@ -55,13 +80,14 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
   // 自定义协议 iframe 里时 location.origin 不是可用地址，页面以它为准
   const jsHttpBase = JSON.stringify(httpBase)
   const jsExtraBases = JSON.stringify(extraBases)
+  const jsServiceUrls = JSON.stringify(serviceUrls)
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
-  <title>API Key 管理 · DSH Web Service</title>
+  <title>API 服务 · DSH Web Service</title>
   <style>
     ${HARNESS_TOKENS_CSS}
     ${HARNESS_PRIMITIVES_CSS}
@@ -75,8 +101,65 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
     .empty { text-align: center; padding: 34px 20px; }
     .empty ol { text-align: left; display: inline-block; margin: 12px auto; color: var(--dsw-alias-label-secondary); font-size: 13px; }
     .empty li { margin: 4px 0; }
+    .empty .btn { display: block; margin: 8px auto 0; }
 
     .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13.5px; }
+
+    /* API 服务：状态 / 地址 / 表单 */
+    .svc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .svc-state { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 600; }
+    .svc-state.is-stopped { color: var(--dsw-alias-label-secondary); }
+    .svc-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+      background: var(--dsw-alias-label-caption);
+    }
+    .svc-state.is-running .svc-dot {
+      background: var(--dsw-alias-state-success-primary);
+      box-shadow: 0 0 0 3px var(--dsw-alias-state-success-tertiary);
+    }
+    .svc-endpoint { font-family: var(--ds-font-family-code); font-size: 12.5px; }
+
+    .svc-url-block {
+      margin-top: 12px; padding: 12px 14px; border-radius: 10px;
+      background: var(--dsw-alias-bg-layer-2);
+      border: 1px solid var(--dsw-alias-border-l1);
+    }
+    .svc-url-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .svc-url { font-size: 13px; padding: 4px 8px; }
+    .svc-url.is-preview { color: var(--dsw-alias-label-secondary); }
+    .svc-url-extra { display: flex; flex-direction: column; gap: 2px; }
+
+    .svc-form { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 20px; margin-top: 16px; align-items: start; }
+    .svc-port-row { display: flex; gap: 8px; align-items: stretch; }
+    .svc-port-row input { flex: 1 1 auto; min-width: 0; }
+    .svc-actions { display: flex; align-items: center; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+    .svc-actions .btn { min-width: 104px; }
+    @media (max-width: 640px) {
+      .svc-form { grid-template-columns: 1fr; gap: 14px; }
+    }
+
+    /* 监听范围：圆角卡片式单选 */
+    .bind-ip-group { display: flex; gap: 10px; flex-wrap: wrap; }
+    .bind-ip-option {
+      display: flex; align-items: flex-start; gap: 9px; min-width: 180px;
+      padding: 9px 14px 9px 12px; cursor: pointer;
+      background: var(--dsw-specific-input-major);
+      border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px;
+      transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out),
+                  box-shadow var(--ds-transition-duration-fast) var(--ds-ease-in-out),
+                  background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+    }
+    .bind-ip-option:hover { border-color: var(--dsw-alias-link); }
+    .bind-ip-option input[type="radio"] { margin: 2px 0 0; accent-color: var(--dsw-alias-link); cursor: pointer; }
+    .bind-ip-option:focus-within { box-shadow: 0 0 0 3px var(--dsw-alias-state-business-tertiary); }
+    .bind-ip-option.selected { border-color: var(--dsw-alias-link); }
+    .bind-ip-text { display: flex; flex-direction: column; gap: 1px; }
+    .bind-ip-addr { font-family: var(--ds-font-family-code); font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+    .bind-ip-desc { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+
+    /* 地址行（主地址 / 备用地址，均带复制按钮） */
+    .url-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+    .url-row code.inline { overflow-wrap: anywhere; }
 
     /* 内嵌模式（DSH GUI 侧边栏 iframe）：隐藏面包屑等导航冗余，收紧留白；
        页头 SWAGGER / GitHub / 问题反馈 / 检查更新 按钮保留可见 */
@@ -106,16 +189,13 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
   <div class="container">
     <nav class="breadcrumb" aria-label="面包屑">
       <a href="${base}/docs">DSH Web Service API</a> &rsaquo; 设置 &rsaquo;
-      <span aria-current="page">API Key 管理</span>
+      <span aria-current="page">API 服务与密钥</span>
     </nav>
 
     <header class="page-header">
       <div>
-        <h1>API Key 管理 <span class="version-tag">v${pluginVersion}</span></h1>
-        <div class="subtitle">在此管理第三方程序调用 DSH API 时使用的访问密钥 &bull; 基础前缀 <code class="inline">${base}</code></div>
-        <div class="subtitle" style="margin-top:4px;">服务地址（当前访问） <code class="inline" id="hdrFullBase">&hellip;</code>
-          <button class="btn btn-ghost btn-sm" onclick="copyBaseUrl()" style="margin-left:6px;">复制地址</button>
-        </div>
+        <h1>API 服务与密钥 <span class="version-tag">v${pluginVersion}</span></h1>
+        <div class="subtitle">第三方程序调用 DSH 的访问密钥与独立服务端口 &bull; 基础前缀 <code class="inline">${base}</code></div>
       </div>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <a href="${base}/docs/reference" data-nav="frame" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">${SWAGGER_ICON}<span>SWAGGER</span></a>
@@ -162,13 +242,76 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
             </label>
           </span>
         </div>
-        <p class="muted" style="margin-top:12px;">
-          关闭鉴权后，任何能访问本服务端口的程序都无需 Key 即可调用全部接口（含文件读写、会话操作）。
-          已生成的 Key 仍然有效，但不再校验。
-        </p>
       </div>
 
-      <div class="section-title">2. API Keys
+      <div class="section-title">2. API 服务</div>
+      <div class="card">
+        <div class="svc-head">
+          <span class="svc-state is-stopped" id="svcState">
+            <span class="svc-dot" aria-hidden="true"></span>
+            <span id="svcStateLabel">加载中…</span>
+          </span>
+          <span class="muted svc-endpoint" id="svcEndpoint"></span>
+        </div>
+
+        <div class="svc-url-block">
+          <div class="svc-url-head">
+            <span class="field-label" style="margin:0;">API 地址</span>
+            <span class="badge badge-revoked" id="svcUrlTag" style="display:none;"></span>
+          </div>
+          <div class="url-row">
+            <code class="inline svc-url" id="svcUrl">—</code>
+            <button class="btn btn-ghost btn-sm" id="btnSvcCopy" onclick="copyServiceUrl()" disabled>复制</button>
+          </div>
+          <div class="svc-url-extra" id="svcUrlExtra"></div>
+        </div>
+
+        <div class="svc-form">
+          <div>
+            <label class="field-label" for="svcPort">端口</label>
+            <div class="svc-port-row">
+              <input type="number" id="svcPort" min="1024" max="65535" inputmode="numeric" autocomplete="off"
+                     aria-describedby="svcPortError">
+              <button class="btn btn-ghost btn-sm" id="btnSvcFreePort" onclick="pickFreePort()" title="自动选择一个空闲端口">自动</button>
+            </div>
+            <div class="field-error" id="svcPortError" style="display:none;" role="alert"></div>
+          </div>
+          <div>
+            <div class="field-label" id="svcBindLabel">监听范围</div>
+            <div class="bind-ip-group" role="radiogroup" aria-labelledby="svcBindLabel">
+              <label class="bind-ip-option" id="bindIpOptLocal">
+                <input type="radio" name="bindIpChoice" value="127.0.0.1" onchange="onServiceFormChange()">
+                <span class="bind-ip-text">
+                  <span class="bind-ip-addr">127.0.0.1</span>
+                  <span class="bind-ip-desc">仅本机可访问</span>
+                </span>
+              </label>
+              <label class="bind-ip-option" id="bindIpOptLan">
+                <input type="radio" name="bindIpChoice" value="0.0.0.0" onchange="onServiceFormChange()">
+                <span class="bind-ip-text">
+                  <span class="bind-ip-addr">0.0.0.0</span>
+                  <span class="bind-ip-desc">局域网可访问</span>
+                </span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="svc-actions">
+          <button class="btn" id="btnSvcPrimary" onclick="applyService()" disabled>加载中…</button>
+          <button class="btn btn-ghost" id="btnSvcStop" onclick="stopService()" style="display:none;">停止服务</button>
+          <span class="muted" id="svcHint"></span>
+        </div>
+
+        <div class="alert alert-warn" id="svcLanWarn" role="note" style="display:none; margin:14px 0 0;">
+          <div><strong>局域网可访问</strong>同一网络中的设备都能调用全部 API，请保持鉴权开启；管理接口仍仅限本机。</div>
+        </div>
+        <div class="alert alert-danger" id="svcErrorBox" role="alert" style="display:none; margin:14px 0 0;">
+          <div id="svcErrorText"></div>
+        </div>
+      </div>
+
+      <div class="section-title">3. API Keys
         <label class="switch" style="margin-left:auto; font-size:13px;">
           <input type="checkbox" id="hideRevoked" onchange="boot()">
           <span>隐藏已吊销</span>
@@ -201,7 +344,7 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
         <div id="keyLoading" class="empty muted">加载中…</div>
       </div>
 
-      <div class="section-title">3. 如何在客户端使用</div>
+      <div class="section-title">4. 如何在客户端使用</div>
       <div class="card">
         <p class="muted" style="margin-bottom:10px;">
           客户端请求需携带以下任一请求头。把 <code class="inline">&lt;key&gt;</code> 换成刚生成的完整密钥：
@@ -401,11 +544,10 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
     // 服务端注入的 webserver 实际监听地址 + 补充地址（局域网 / 独立端口）
     const SERVER_BASE = ${jsHttpBase};
     const EXTRA_BASES = ${jsExtraBases};
-    // 当前访问的完整 URL：浏览器 http(s) 访问时以真实访问地址为准；
-    // GUI 内嵌（dsh-app:// 等自定义协议 iframe）时 location.origin 不是可用的
-    // 访问地址，退回服务端注入的 webserver 监听地址
+    const SERVICE_URLS = ${jsServiceUrls};
+    // 浏览器 http(s) 访问时以真实访问地址为准；GUI 内嵌（dsh-app:// 等自定义协议
+    // iframe）时 location.origin 不是可用的访问地址，退回服务端注入的 webserver 地址
     const IS_HTTP_PAGE = location.protocol === 'http:' || location.protocol === 'https:';
-    const FULL_BASE = IS_HTTP_PAGE ? (location.origin + BASE) : (SERVER_BASE || location.origin + BASE);
     const TOKEN_PATH = ${jsTokenPath};
     const TOKEN_KEY = 'dsh_admin_token';
     let TOKEN = localStorage.getItem(TOKEN_KEY) || '';
@@ -443,12 +585,18 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
       const opts = options || {};
       const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
       if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
-      const res = await fetch(BASE + path, {
-        method: opts.method || 'GET',
-        headers: headers,
-        body: opts.body ? JSON.stringify(opts.body) : undefined,
-        cache: 'no-store',
-      });
+      let res;
+      try {
+        res = await fetch(BASE + path, {
+          method: opts.method || 'GET',
+          headers: headers,
+          body: opts.body ? JSON.stringify(opts.body) : undefined,
+          cache: 'no-store',
+        });
+      } catch (e) {
+        // 网络层失败（服务刚被停止 / 本页正由被停止的监听器提供）不抛给调用方
+        return { status: 0, body: null, networkError: true };
+      }
       let payload = null;
       try { payload = await res.json(); } catch (e) { payload = null; }
       const r = { status: res.status, body: payload };
@@ -527,6 +675,7 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
       renderAuth(r.body.data || {});
       renderKeys();
       renderCurl();
+      loadService();
     }
 
     function logoutToken() {
@@ -594,6 +743,375 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
       toast((r.body.data && r.body.data.message) || '已保存');
       boot();
     }
+
+    // ---------- API 服务（端口 / 监听范围 / 启停） ----------
+    // 契约（v0.5.0 后端）：
+    //   GET  /api-keys/service              → { running, port, bindIp, listeningPort,
+    //                                         mainPort, lanIps[], urls[], exposedToLan, autoStart, error? }
+    //   POST /api-keys/service/start {port?, bindIp?} → 200 状态 + message / 409 { error }
+    //   POST /api-keys/service/stop        → 200 状态 + message
+    //   GET  /api-keys/service/free-port   → { port }
+    // 页面交互：地址区始终跟随表单实时预览（运行中且已应用时显示真实地址）；
+    // 主按钮按状态变为「启动服务 / 应用并重启 / 运行中」，停止是独立动作。
+    let SERVICE = null;      // 最近一次服务端状态（归一化后）
+    let SVC_TOUCHED = false; // 用户是否改过端口 / 监听范围
+    let SVC_BUSY = false;    // 正在启动 / 停止
+    let SVC_ERROR = '';      // 本页操作产生的错误（优先于服务端最近错误）
+
+    function normalizeServiceState(d) {
+      if (!d || typeof d !== 'object') return null;
+      const port = Number(d.port) || 0;
+      const listeningPort = Number(d.listeningPort) || 0;
+      return {
+        running: !!d.running && listeningPort > 0,
+        port: port,
+        bindIp: d.bindIp === '0.0.0.0' ? '0.0.0.0' : '127.0.0.1',
+        listeningPort: listeningPort,
+        mainPort: Number(d.mainPort) || 0,
+        lanIps: Array.isArray(d.lanIps)
+          ? d.lanIps.filter(function (x) { return typeof x === 'string' && x && x.indexOf(':') < 0; })
+          : [],
+        urls: Array.isArray(d.urls)
+          ? d.urls.filter(function (x) { return typeof x === 'string' && x; })
+          : [],
+        exposedToLan: !!d.exposedToLan,
+        autoStart: d.autoStart !== false,
+        error: typeof d.error === 'string' ? d.error : '',
+      };
+    }
+
+    /** resyncForm=false：只刷新状态、保留用户正在编辑的端口（启动失败后使用） */
+    async function loadService(resyncForm) {
+      const r = await api('/api-keys/service');
+      if (isAuthFail(r)) return;
+      if (r.status === 0) { renderService(SERVICE); return; }
+      if (r.status !== 200 || !r.body || !r.body.ok) { renderService(SERVICE); return; }
+      if (resyncForm !== false) SVC_TOUCHED = false;
+      renderService(normalizeServiceState(r.body.data || {}));
+      syncClientBase();
+    }
+
+    // ---- 表单读取 / 校验 ----
+    /** 端口输入视图：empty=留空（沿用当前端口）、invalid=非法、value=有效端口 */
+    function svcPortInput() {
+      const el = document.getElementById('svcPort');
+      const raw = (el && el.value ? String(el.value) : '').trim();
+      if (raw === '') return { empty: true, valid: true, value: 0 };
+      const v = Number(raw);
+      if (!Number.isInteger(v) || v < 1024 || v > 65535) return { empty: false, valid: false, value: 0 };
+      return { empty: false, valid: true, value: v };
+    }
+
+    /** 生效端口：输入有效则用输入值；留空回退已保存端口 */
+    function svcEffectivePort() {
+      const p = svcPortInput();
+      if (p.valid && !p.empty) return p.value;
+      return (SERVICE && SERVICE.port) || 0;
+    }
+
+    function svcFormBindIp() {
+      const checked = document.querySelector('input[name="bindIpChoice"]:checked');
+      return checked && checked.value === '0.0.0.0' ? '0.0.0.0' : '127.0.0.1';
+    }
+
+    function setSvcBindSelection(v) {
+      const val = v === '0.0.0.0' ? '0.0.0.0' : '127.0.0.1';
+      document.querySelectorAll('input[name="bindIpChoice"]').forEach(function (el) {
+        el.checked = el.value === val;
+      });
+      const optLocal = document.getElementById('bindIpOptLocal');
+      const optLan = document.getElementById('bindIpOptLan');
+      if (optLocal) optLocal.classList.toggle('selected', val === '127.0.0.1');
+      if (optLan) optLan.classList.toggle('selected', val === '0.0.0.0');
+    }
+
+    function validateServicePort() {
+      const input = document.getElementById('svcPort');
+      const err = document.getElementById('svcPortError');
+      if (!input || !err) return;
+      const msg = svcPortInput().valid ? '' : '端口需为 1024-65535 的整数';
+      input.classList.toggle('input-invalid', !!msg);
+      err.textContent = msg;
+      err.style.display = msg ? '' : 'none';
+    }
+
+    /** 表单是否偏离当前生效配置（留空 = 沿用当前端口；非法输入不参与判断） */
+    function svcDirty() {
+      if (!SERVICE) return false;
+      const view = svcPortInput();
+      if (!view.valid) return false;
+      const port = view.empty ? SERVICE.port : view.value;
+      const bind = svcFormBindIp();
+      if (SERVICE.running) return port !== SERVICE.listeningPort || bind !== SERVICE.bindIp;
+      return port !== SERVICE.port || bind !== SERVICE.bindIp;
+    }
+
+    // ---- 地址预览 / 渲染 ----
+    function isLoopbackHost(h) {
+      return h === 'localhost' || h === '::1' || h === '[::1]' || h === '127.0.0.1' || /^127\./.test(h);
+    }
+
+    function previewServiceUrls(port, bindIp) {
+      if (!port) return [];
+      const urls = ['http://127.0.0.1:' + port + BASE]; // 回环地址始终可用
+      if (bindIp === '0.0.0.0') {
+        ((SERVICE && SERVICE.lanIps) || []).forEach(function (ip) {
+          if (ip.indexOf(':') >= 0) return;
+          const u = 'http://' + ip + ':' + port + BASE;
+          if (urls.indexOf(u) < 0) urls.push(u);
+        });
+        // 兜底：本页经局域网 IP 打开时，当前主机名就是一张网卡
+        if (IS_HTTP_PAGE) {
+          const h = location.hostname;
+          if (h && !isLoopbackHost(h)) {
+            const u = 'http://' + h + ':' + port + BASE;
+            if (urls.indexOf(u) < 0) urls.push(u);
+          }
+        }
+      }
+      return urls;
+    }
+
+    function renderLanWarn() {
+      const warn = document.getElementById('svcLanWarn');
+      if (warn) warn.style.display = svcFormBindIp() === '0.0.0.0' ? '' : 'none';
+    }
+
+    function renderServiceError(msg) {
+      const box = document.getElementById('svcErrorBox');
+      const text = document.getElementById('svcErrorText');
+      if (!box || !text) return;
+      box.style.display = msg ? '' : 'none';
+      text.textContent = msg || '';
+    }
+
+    function setServiceError(msg) {
+      SVC_ERROR = msg || '';
+      renderServiceError(SVC_ERROR || ((SERVICE && SERVICE.error) || ''));
+    }
+
+    function renderService(st) {
+      if (st) SERVICE = st;
+      const running = !!(SERVICE && SERVICE.running);
+      const dirty = svcDirty();
+      const portView = svcPortInput();
+      const formPort = svcEffectivePort();
+      const formBind = svcFormBindIp();
+
+      // 状态行
+      const stateEl = document.getElementById('svcState');
+      const stateLabel = document.getElementById('svcStateLabel');
+      const endpoint = document.getElementById('svcEndpoint');
+      if (stateEl) stateEl.className = 'svc-state ' + (running ? 'is-running' : 'is-stopped');
+      if (stateLabel) stateLabel.textContent = !SERVICE ? '加载中…' : (running ? '运行中' : '已停止');
+      if (endpoint) {
+        if (!SERVICE) endpoint.textContent = '';
+        else if (running) endpoint.textContent = SERVICE.bindIp + ':' + SERVICE.listeningPort;
+        else endpoint.textContent = '独立端口未启动 · 主端口 ' + (SERVICE.mainPort || '—') + ' 仍可访问';
+      }
+
+      // 表单：用户没改过时跟随服务端值
+      const portInput = document.getElementById('svcPort');
+      if (SERVICE && !SVC_TOUCHED) {
+        if (portInput && document.activeElement !== portInput) {
+          portInput.value = SERVICE.port > 0 ? String(SERVICE.port) : '';
+        }
+        setSvcBindSelection(SERVICE.bindIp);
+      }
+      if (portInput && SERVICE && SERVICE.port > 0) portInput.placeholder = String(SERVICE.port);
+      validateServicePort();
+
+      // API 地址：运行中且无改动 → 真实地址；其余 → 编辑中的预览
+      let urls = [];
+      let tagText = '';
+      let tagClass = 'badge badge-revoked';
+      if (running && !dirty) {
+        urls = SERVICE.urls.slice();
+        tagText = '运行中';
+        tagClass = 'badge badge-active';
+      } else {
+        urls = previewServiceUrls(formPort, SVC_TOUCHED ? formBind : (SERVICE ? SERVICE.bindIp : formBind));
+        if (running) { tagText = '待应用'; tagClass = 'badge badge-off'; }
+        else { tagText = '预览'; }
+      }
+      const tag = document.getElementById('svcUrlTag');
+      if (tag) {
+        tag.textContent = tagText;
+        tag.className = tagClass;
+        tag.style.display = urls.length ? '' : 'none';
+      }
+      const urlCode = document.getElementById('svcUrl');
+      if (urlCode) {
+        urlCode.textContent = urls[0] || '服务未启动';
+        urlCode.classList.toggle('is-preview', !(running && !dirty));
+      }
+      const copyBtn = document.getElementById('btnSvcCopy');
+      if (copyBtn) copyBtn.disabled = !urls.length;
+      const extra = document.getElementById('svcUrlExtra');
+      if (extra) {
+        extra.innerHTML = urls.slice(1).map(function (u) {
+          return '<div class="url-row"><code class="inline">' + esc(u) + '</code>' +
+            '<button type="button" class="btn btn-ghost btn-sm" data-copy-url="' + esc(u) + '">复制</button></div>';
+        }).join('');
+      }
+
+      // 动作区
+      const primary = document.getElementById('btnSvcPrimary');
+      const stopBtn = document.getElementById('btnSvcStop');
+      const hint = document.getElementById('svcHint');
+      if (primary && !SVC_BUSY) {
+        const canApply = portView.valid && formPort > 0;
+        if (!SERVICE) {
+          primary.textContent = '加载中…';
+          primary.disabled = true;
+        } else if (!running) {
+          primary.textContent = '启动服务';
+          primary.disabled = !canApply;
+        } else if (dirty) {
+          primary.textContent = '应用并重启';
+          primary.disabled = !canApply;
+        } else if (!portView.valid) {
+          primary.textContent = '应用并重启';
+          primary.disabled = true;
+        } else {
+          primary.textContent = '已应用';
+          primary.disabled = true;
+        }
+      }
+      if (stopBtn) {
+        stopBtn.style.display = running ? '' : 'none';
+        if (!SVC_BUSY) stopBtn.disabled = false;
+      }
+      if (hint) hint.textContent = (running && dirty && SERVICE.urls[0]) ? ('当前生效：' + SERVICE.urls[0]) : '';
+      renderLanWarn();
+      renderServiceError(SVC_ERROR || ((SERVICE && SERVICE.error) || ''));
+    }
+
+    function onServiceFormChange() {
+      if (SVC_BUSY) return;
+      const wasTouched = SVC_TOUCHED;
+      SVC_TOUCHED = true;
+      setSvcBindSelection(svcFormBindIp());
+      // 首次改动时清掉上一次的错误提示
+      if (!wasTouched) SVC_ERROR = '';
+      renderService(SERVICE);
+    }
+
+    function setServiceBusy(busy) {
+      SVC_BUSY = busy;
+      const primary = document.getElementById('btnSvcPrimary');
+      const stopBtn = document.getElementById('btnSvcStop');
+      const freeBtn = document.getElementById('btnSvcFreePort');
+      const portInput = document.getElementById('svcPort');
+      [primary, stopBtn, freeBtn].forEach(function (b) { if (b) b.disabled = !!busy; });
+      if (portInput) portInput.disabled = !!busy;
+      if (primary && busy) primary.textContent = '处理中…';
+    }
+
+    async function pickFreePort() {
+      if (!requireAuth()) return;
+      const btn = document.getElementById('btnSvcFreePort');
+      if (btn) btn.disabled = true;
+      try {
+        const r = await api('/api-keys/service/free-port');
+        if (isAuthFail(r)) return;
+        const port = r.body && r.body.ok && r.body.data && r.body.data.port;
+        if (r.status !== 200 || !port) { toast('没有获取到空闲端口，请手动填写'); return; }
+        const input = document.getElementById('svcPort');
+        if (input) input.value = String(port);
+        SVC_TOUCHED = true;
+        SVC_ERROR = '';
+        renderService(SERVICE);
+        if (input) input.focus();
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    async function applyService() {
+      if (!requireAuth()) return;
+      const view = svcPortInput();
+      const port = svcEffectivePort();
+      if (!view.valid || !port) {
+        validateServicePort();
+        const input = document.getElementById('svcPort');
+        if (input) input.focus();
+        return;
+      }
+      const bindIp = svcFormBindIp();
+      setServiceBusy(true);
+      SVC_ERROR = '';
+      try {
+        const r = await api('/api-keys/service/start', { method: 'POST', body: { port: port, bindIp: bindIp } });
+        if (isAuthFail(r)) return;
+        if (r.status === 0) {
+          setServiceError('无法连接 API 服务：如果本页是通过独立端口打开的，请改用 DSH 主端口的设置页再操作');
+          return;
+        }
+        if (r.status !== 200 || !r.body || !r.body.ok) {
+          setServiceError((r.body && r.body.error) || ('HTTP ' + r.status));
+          await loadService(false); // 刷新状态但保留用户填写的端口，便于直接改端口重试
+          return;
+        }
+        SVC_TOUCHED = false;
+        SVC_ERROR = '';
+        renderService(normalizeServiceState(r.body.data || {}));
+        toast((r.body.data && r.body.data.message) || '服务已启动');
+        syncClientBase();
+      } finally {
+        setServiceBusy(false);
+        renderService(SERVICE);
+      }
+    }
+
+    async function stopService() {
+      if (!requireAuth()) return;
+      setServiceBusy(true);
+      SVC_ERROR = '';
+      try {
+        const r = await api('/api-keys/service/stop', { method: 'POST', body: {} });
+        if (isAuthFail(r)) return;
+        if (r.status === 0) {
+          // 本页若正由被停止的服务提供，响应可能丢失：直接按已停止收敛
+          if (SERVICE) renderService(Object.assign({}, SERVICE, { running: false, listeningPort: 0, urls: [] }));
+          toast('服务已停止');
+          return;
+        }
+        if (r.status !== 200 || !r.body || !r.body.ok) {
+          setServiceError((r.body && r.body.error) || ('HTTP ' + r.status));
+          return;
+        }
+        SVC_TOUCHED = false;
+        renderService(normalizeServiceState(r.body.data || {}));
+        toast('服务已停止');
+        syncClientBase();
+      } finally {
+        setServiceBusy(false);
+        renderService(SERVICE);
+      }
+    }
+
+    function copyServiceUrl() {
+      const el = document.getElementById('svcUrl');
+      const url = el && el.textContent && el.textContent !== '服务未启动' ? el.textContent : currentBaseUrl();
+      writeClipboard(url)
+        .then(function () { toast('已复制：' + url); })
+        .catch(function () { toast('复制失败，请手动选中复制'); });
+    }
+
+    // 端口输入、绑定单选、地址复制事件（页面脚本位于 body 末尾，元素已就绪）
+    (function wireServiceControls() {
+      const input = document.getElementById('svcPort');
+      if (input) input.addEventListener('input', onServiceFormChange);
+      const list = document.getElementById('svcUrlExtra');
+      if (list) list.addEventListener('click', function (e) {
+        const btn = e.target.closest ? e.target.closest('button[data-copy-url]') : null;
+        if (!btn) return;
+        const url = btn.getAttribute('data-copy-url');
+        writeClipboard(url).then(function () { toast('已复制：' + url); })
+          .catch(function () { toast('复制失败，请手动选中复制'); });
+      });
+    })();
 
     // ---------- Key 列表 ----------
     function renderKeys() {
@@ -1028,37 +1546,56 @@ export function generateApiKeysHtml(prefix: string, adminTokenPath = '', embed =
       }
     }
 
-    // ---------- 服务地址（当前访问的完整 URL） ----------
+    // ---------- 客户端 Base URL（跟随 API 服务运行状态） ----------
+    /** 独立服务运行中时用固定端口地址；否则用当前访问地址（主端口） */
+    function currentBaseUrl() {
+      if (SERVICE && SERVICE.running && SERVICE.urls.length) return SERVICE.urls[0];
+      if (SERVICE_URLS && SERVICE_URLS.length) return SERVICE_URLS[0];
+      return IS_HTTP_PAGE ? (location.origin + BASE) : (SERVER_BASE || location.origin + BASE);
+    }
+
     function fillBaseUrl() {
-      const hdr = document.getElementById('hdrFullBase');
+      const baseUrl = currentBaseUrl();
       const box = document.getElementById('baseUrlBox');
+      if (box) box.textContent = baseUrl;
       const extras = document.getElementById('baseUrlExtras');
-      if (hdr) hdr.textContent = FULL_BASE;
-      if (box) box.textContent = FULL_BASE;
       if (extras) {
-        const others = (EXTRA_BASES || []).filter(function (u) { return u && u !== FULL_BASE; });
-        if (others.length) {
-          extras.innerHTML = '局域网 / 独立端口访问：<br>' + others.map(function (u) {
-            return '<code class="inline">' + esc(u) + '</code>';
-          }).join('<br>');
-        }
+        const others = [];
+        const add = function (u) {
+          if (u && u !== baseUrl && others.indexOf(u) < 0) others.push(u);
+        };
+        ((SERVICE && SERVICE.urls) || []).forEach(add);
+        // 独立服务在跑时不再列出随时漂移的主端口地址；停止时才用它兜底
+        if (!(SERVICE && SERVICE.running)) (EXTRA_BASES || []).forEach(add);
+        extras.innerHTML = others.length
+          ? '其他可用地址：<br>' + others.map(function (u) {
+              return '<code class="inline">' + esc(u) + '</code>';
+            }).join('<br>')
+          : '';
       }
     }
     async function copyBaseUrl() {
+      const url = currentBaseUrl();
       try {
-        await writeClipboard(FULL_BASE);
-        toast('已复制服务地址：' + FULL_BASE);
+        await writeClipboard(url);
+        toast('已复制服务地址：' + url);
       } catch (e) {
         toast('复制失败，请手动选中复制');
       }
     }
+    /** 服务状态变化后同步「4. 如何在客户端使用」中的地址与示例 */
+    function syncClientBase() {
+      fillBaseUrl();
+      renderCurl();
+    }
 
     // ---------- curl ----------
     function renderCurl() {
+      const url = currentBaseUrl();
       document.getElementById('curlBox').textContent =
-        'curl -H "Authorization: Bearer <key>" ' + FULL_BASE + '/system/status\\n\\n' +
+        'curl -H "Authorization: Bearer <key>" ' + url + '/system/status\\n\\n' +
         '# 或者使用 X-API-Key 头：\\n' +
-        'curl -H "X-API-Key: <key>" ' + FULL_BASE + '/system/status';
+        'curl -H "X-API-Key: <key>" ' + url + '/system/status';
     }
     function copyCurl() {
       navigator.clipboard.writeText(document.getElementById('curlBox').textContent)

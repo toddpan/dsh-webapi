@@ -128,7 +128,7 @@ try {
   check('GET /settings/api-keys → 200', r.status === 200, `status=${r.status}`)
   check('Content-Type 为 text/html; charset=utf-8', String(r.headers.get('content-type')).includes('text/html'))
   check('页面带 no-store', String(r.headers.get('cache-control')).includes('no-store'))
-  check('含「API Key 管理」区块标题', html.includes('API Key 管理'))
+  check('含页面标题（API 服务与密钥）', html.includes('API 服务与密钥'))
   check('含「新建 API Key」按钮', html.includes('新建 API Key'))
   check('含「Key 值」选择器（随机 / 自定义）', html.includes('id="fKeyMode"'))
   check('含「使用自定义 Key（粘贴已有 Key）」选项', html.includes('使用自定义 Key（粘贴已有 Key）'))

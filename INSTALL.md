@@ -38,7 +38,9 @@ dsh plugin --profile web add \
   config:
     pathPrefix: /api/v1        # 路由前缀
     apiKey: ''                 # 非空则开启鉴权
-    standalonePort: 0          # >0 时额外独立监听该端口
+    # 独立 API 服务：首次安装自动分配端口（这里可指定初始值），之后在设置页「API 服务」启停
+    standalonePort: 0          # 首次安装的初始端口；0 = 自动分配（31800-31899）
+    standaloneBindIp: '127.0.0.1'  # 首次安装的初始监听范围：127.0.0.1 仅本机 / 0.0.0.0 局域网可达
     cors: true
     defaultCwd: ''
     maxUploadBytes: 2147483648

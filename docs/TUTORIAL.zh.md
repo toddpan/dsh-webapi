@@ -171,7 +171,8 @@ curl -o out.zip "$BASE/sessions/$SID/files/download?path=dist/out.zip"
   name: 'dsh-web-service'
   config:
     pathPrefix: /api/v1          # 路由前缀
-    standalonePort: 0            # >0 时额外开一个独立端口（监听 0.0.0.0）
+    standalonePort: 0            # 首次安装的初始端口；0 = 自动分配（31800-31899）
+    standaloneBindIp: '127.0.0.1' # 首次安装的初始监听范围：127.0.0.1 仅本机 / 0.0.0.0 局域网
     cors: true                   # 允许跨域
     defaultCwd: ''               # 建会话不传 cwd 时的默认目录，空 = DSH 进程目录
     maxUploadBytes: 2147483648   # 上传上限，默认 2 GiB
@@ -182,14 +183,14 @@ curl -o out.zip "$BASE/sessions/$SID/files/download?path=dist/out.zip"
 | 字段 | 默认 | 什么时候改 |
 |---|---|---|
 | `pathPrefix` | `/api/v1` | 和别的插件路由冲突，或要挂在网关子路径下 |
-| `standalonePort` | `0` | 想让 API 与 GUI 分端口，比如单独对外暴露 `8787` |
+| `standalonePort` | `0` | 只想指定首次安装的端口时用；装好后日常在设置页「API 服务」启停与修改 |
 | `cors` | `true` | 只给后端调用时可关掉 |
 | `defaultCwd` | 空 | 三方调用通常不传 cwd，固定一个项目目录更省事 |
 | `maxUploadBytes` | 2 GiB | 想限制上传体积 |
 | `adminRemoteAccess` | `false` | 确实需要从别的机器管理密钥（务必配合网络层保护） |
 | `apiKey` | 空 | 只为兼容老配置；新用法见下一节 |
 
-> 注意：开 `standalonePort` 后接口会监听所有网卡。如果机器在公网或共享网络里，请先开启 API Key 鉴权。
+> 注意：设置页把监听范围改成 `0.0.0.0` 后，局域网内设备都能访问全部接口。共享网络里请先开启 API Key 鉴权。
 
 ## 7. API Key：给接口加把锁
 
@@ -197,9 +198,12 @@ curl -o out.zip "$BASE/sessions/$SID/files/download?path=dist/out.zip"
 
 ### 7.1 打开设置页
 
-三个入口任选：DSH Web GUI 侧边栏「API Key 管理」、直接访问 `/api/v1/settings/api-keys`、或 `/docs` 页头的「管理 API Key」。
+三个入口任选：DSH Web GUI 侧边栏「API 服务」、直接访问 `/api/v1/settings/api-keys`、或 `/docs` 页头的「管理 API Key」。
 
 ![API Key 设置页](images/api-keys.png)
+
+页面顶部「2. API 服务」是独立端口的启停面板：首次安装会自动分配一个端口并启动，地址区随端口
+和监听范围实时变化，可一键复制；需要停机时点「停止服务」，下次要用再点「启动服务」。
 
 ### 7.2 输入管理令牌
 
