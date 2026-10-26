@@ -10,3 +10,7 @@ node_modules/
 .v2c/
 .video_agent/
 onenat-skill.md
+
+# pnpm 本地依赖链接产物（构建临时生成，不入库）
+.pnpm-store/
+pnpm-lock.yaml
