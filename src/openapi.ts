@@ -580,6 +580,14 @@ function generateOpenApiSpec(prefix: string) {
           responses: { 200: { description: 'OpenAI 格式回复' } },
         },
       },
+      '/plugins': {
+        get: {
+          summary: '列出本节点已装 DSH 插件',
+          description: '数据源=profile package.json 依赖 + 兜底 node_modules 扫描；每条带 family:dsh 与 sourcePath（供控制台按家族匹配导入）。无鉴权外要求与数据面一致。',
+          tags: ['Plugins'],
+          responses: { 200: { description: '插件清单 {ok,data:{count,family,profile,plugins[]}}' } },
+        },
+      },
       '/skills': {
         get: {
           summary: '查询技能列表（管理视图）',

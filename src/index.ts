@@ -19,6 +19,7 @@ import { registerStreamingRoutes } from './streaming.js'
 import { registerFileRoutes } from './files.js'
 import { registerFsRoutes } from './fs.js'
 import { registerSkillRoutes } from './skills.js'
+import { registerPluginRoutes } from './plugins.js'
 import { registerUserQuestionBridge } from './user-questions.js'
 import { registerCollaborationRoutes } from './collaboration.js'
 import { registerOpenApiRoutes } from './openapi.js'
@@ -134,6 +135,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   registerFileRoutes(ctx, router, config)
   registerFsRoutes(router, config)
   registerSkillRoutes(ctx, router, config)
+  registerPluginRoutes(router)
   registerUserQuestionBridge(ctx, router)
   registerCollaborationRoutes(ctx, router)
   registerOpenApiRoutes(router, config)
