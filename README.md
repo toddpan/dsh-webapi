@@ -214,6 +214,14 @@ The store lives at `<DSH_HOME>/dsh-web-service/api-keys.json` (mode 0600).
 4. **Streaming** — `POST /sessions/:id/prompt-stream` pushes `delta`, `reasoning`, `tool_call`,
    `tool_result` and `turn_end` over Server-Sent Events; `GET /sessions/:id/events` taps the session's
    raw event bus.
+   **Streaming & timeout semantics (important)**: all three chat entry points (`prompt` /
+   `prompt-stream` / `chat/completions`) use a **stall watchdog** instead of a wall-clock turn limit —
+   continuously producing turns (long text generation, multi-step tool runs) are never cut off no
+   matter how long they take; only a sustained absence of session events aborts with an explicit
+   error. Tune via `timeoutMs` (sync entry point, stall gap, default 180s) and `stallTimeoutMs`
+   (streaming entry point, default 300s). Every SSE channel emits a `': ping'` comment frame every
+   15s as a heartbeat so middle proxies/gateways cannot drop idle streams; any internal stream error
+   surfaces as a visible `error` event instead of a silent disconnect.
 5. **OpenAI compatibility** — `POST /chat/completions` accepts a standard OpenAI client, streaming or not.
 6. **Built-in docs** — interactive request page at `GET /api/v1/docs`, OpenAPI 3.0 spec at
    `GET /api/v1/openapi.json`.

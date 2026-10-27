@@ -44,6 +44,26 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
     let streamedText = ''
     let streamedReasoning = ''
 
+    // SSE 心跳：每 15s 注释帧，防中间层（Nginx/网关/浏览器空闲超时）在长沉默期静默掐流
+    const stopHeartbeat = startSseHeartbeat(sse)
+
+    // 停滞看门狗（与 pi-web-service 修复同语义）：不按「整轮总时长」掐断 ——
+    // 持续产出（哪怕远超 5 分钟的长文本/多轮工具）永远不打断；
+    // 只有持续 stallGapMs 收不到任何会话事件（真停滞）才显式报错收流。
+    const stallGapMs = body.stallTimeoutMs && body.stallTimeoutMs > 0 ? body.stallTimeoutMs : 300000
+    let watchdog: ReturnType<typeof setTimeout> | undefined
+    const resetStallTimer = () => {
+      if (watchdog) clearTimeout(watchdog)
+      watchdog = setTimeout(() => {
+        if (cleanedUp) return
+        sse.send('error', { message: `turn stalled: no session events for ${Math.round(stallGapMs / 1000)}s` })
+        sse.send('done', '[DONE]')
+        cleanup()
+      }, stallGapMs)
+      if (typeof watchdog.unref === 'function') watchdog.unref()
+    }
+    resetStallTimer()
+
     /**
      * 本次流所属的 turn。
      *
@@ -70,6 +90,9 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
       if (isForeignTurn(event)) return
 
       try {
+        // 任何属于本会话的事件到达都证明流转活着：重置停滞看门狗
+        resetStallTimer()
+
         if (event.type === 'turn/start') {
           if (!sawTurnStart) {
             sawTurnStart = true
@@ -189,7 +212,11 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
             cleanup()
             break
         }
-      } catch {
+      } catch (err: any) {
+        // 不能静默吞掉：任何 handler 内部错误都要让调用方可见，否则表现为
+        // 「connected 之后流无声消失」且无从排查（pi-web-service 排障教训）。
+        try { sse.send('error', { message: `stream handler error: ${err?.message || err}` }) } catch { /* 响应已结束 */ }
+        sse.send('done', '[DONE]')
         cleanup()
       }
     })
@@ -200,6 +227,8 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
       try {
         unsubscribe()
       } catch {}
+      try { stopHeartbeat() } catch {}
+      if (watchdog) { clearTimeout(watchdog) }
       sse.close()
     }
 
@@ -223,6 +252,9 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
     const sse = initSseStream(res)
     sse.send('connected', { sessionId, message: 'Subscribed to session events', timestamp: Date.now() })
 
+    // SSE 心跳：会话空闲（无事件）期间保活，防中间层静默掐流
+    const stopHeartbeat = startSseHeartbeat(sse)
+
     const unsubscribe = ctx.on('session/event', (session: any, event: any) => {
       if (String(session.id) !== sessionId) return
       try {
@@ -242,6 +274,7 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
       if (cleanedUp) return
       cleanedUp = true
       try { unsubscribe() } catch {}
+      try { stopHeartbeat() } catch {}
       sse.close()
     }
 
@@ -390,10 +423,14 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
           }
         })
 
+        // SSE 注释帧心跳：长思考/工具执行沉默期保活（注释行由标准 SSE/OpenAI 解析器忽略）
+        const stopHeartbeat = startSseHeartbeat({ ping: () => { if (!res.writableEnded) res.write(': ping\n\n') } })
+
         function cleanup() {
           if (cleanedUp) return
           cleanedUp = true
           try { unsubscribe() } catch {}
+          try { stopHeartbeat() } catch {}
           res.end()
         }
 
@@ -402,7 +439,14 @@ export function registerStreamingRoutes(ctx: Context, router: any): void {
         })
 
         // ALS 携带 sessionId，供 ask_user_question 答复桥归属（与另外三个入口保持一致）
-        await askSessionStorage.run({ sessionId }, () => submitPromptToSession(ctx, sessionId, { prompt: promptText }))
+        try {
+          await askSessionStorage.run({ sessionId }, () => submitPromptToSession(ctx, sessionId, { prompt: promptText }))
+        } catch (err: any) {
+          // 头已发出后 sendJson 是 no-op —— 必须用 OpenAI 错误块收流，否则客户端永远挂在空流上
+          res.write(`data: ${JSON.stringify({ error: { message: `Failed to admit prompt: ${err?.message || err}`, type: 'server_error' } })}\n\n`)
+          res.write('data: [DONE]\n\n')
+          cleanup()
+        }
         return
       }
 
@@ -504,15 +548,34 @@ async function executePromptAndWait(
     let usage: Record<string, number> | undefined
     let completed = false
 
-    const timeout = setTimeout(() => {
-      cleanup()
-      if (!completed) {
-        resolve({ content, reasoning, toolCalls, usage })
+    // 停滞看门狗（与 pi-web-service 修复同语义）：不按「整轮总耗时」掐断 ——
+    // 持续产出的轮次（长文本流式生成、多轮工具调用）哪怕远超 180 秒也能完整跑完；
+    // 只有持续 stallGapMs 收不到任何会话事件（模型/工具真停滞）才显式报错。
+    // 兼容旧入参：timeoutMs 继续生效，语义由「总时长上限」改为「停滞阈值」，默认 180s。
+    const stallGapMs = input.timeoutMs && input.timeoutMs > 0 ? input.timeoutMs : 180000
+    let watchdog: ReturnType<typeof setTimeout> | undefined
+    const disarmStall = () => {
+      if (watchdog) {
+        clearTimeout(watchdog)
+        watchdog = undefined
       }
-    }, input.timeoutMs || 180000)
+    }
+    const armStall = () => {
+      disarmStall()
+      watchdog = setTimeout(() => {
+        if (completed) return
+        completed = true
+        cleanup()
+        reject(new Error(`turn stalled: no session events for ${Math.round(stallGapMs / 1000)}s (prompt abandoned)`))
+      }, stallGapMs)
+      if (typeof watchdog.unref === 'function') watchdog.unref()
+    }
 
     const unsubscribe = ctx.on('session/event', (session: any, event: any) => {
       if (String(session.id) !== sessionId) return
+
+      // 每个事件都在证明轮次仍活着：重置停滞计时（含 tool/call、usage 等非文本事件）
+      armStall()
 
       if (event.type === 'assistant/chunk') {
         const chunk = event.data?.chunk
@@ -557,13 +620,15 @@ async function executePromptAndWait(
     })
 
     function cleanup() {
-      clearTimeout(timeout)
+      disarmStall()
       try { unsubscribe() } catch {}
     }
 
+    armStall()
     try {
       await submitPromptToSession(ctx, sessionId, input)
     } catch (err) {
+      completed = true
       cleanup()
       reject(err)
     }
@@ -627,6 +692,21 @@ function extractAssistantText(message: any): { text: string; reasoning: string }
   }
   return { text, reasoning }
 }
+/**
+ * SSE 注释帧心跳：每 intervalMs 写一个 `: ping` 帧，长沉默期（思考/工具执行/排队）
+ * 保活连接，防中间代理与网关因空闲超时静默掐断长流。
+ * 标准 SSE 与 OpenAI SDK 解析器都会忽略注释行。
+ */
+function startSseHeartbeat(sse: { ping: () => void }, intervalMs: number = 15000): () => void {
+  const timer = setInterval(() => {
+    try { sse.ping() } catch { /* 响应已结束，最终由 cleanup 收尾 */ }
+  }, intervalMs)
+  if (typeof timer.unref === 'function') timer.unref()
+  return () => {
+    try { clearInterval(timer) } catch {}
+  }
+}
+
 /** 取 full 相对 streamed 的增量：已对齐只补差量；无法对齐且尚未推送过则补全量。 */
 function takeSuffix(full: unknown, streamed: unknown): string {
   const f = typeof full === 'string' ? full : ''

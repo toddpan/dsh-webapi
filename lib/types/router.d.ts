@@ -59,5 +59,6 @@ export declare function readRawBody(req: IncomingMessage, maxBytes: number): Pro
 /** 开启 SSE 流式通道 */
 export declare function initSseStream(res: ServerResponse): {
     send: (event: string, data: any) => void;
+    ping: () => void;
     close: () => void;
 };

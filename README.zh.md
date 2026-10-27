@@ -195,6 +195,7 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
 4. **会话流式交互 (Streaming)**：
    - `POST /sessions/:id/prompt-stream`：基于 Server-Sent Events (SSE) 实时推送 `delta`、`reasoning`、`tool_call`、`tool_result` 与 `turn_end`。
    - `GET /sessions/:id/events`：会话底层事件总线实时广播监听通道。
+   - **流式与超时语义（重要）**：三个对话入口（`prompt` / `prompt-stream` / `chat/completions`）均采用**停滞看门狗**而非「整轮总时长」上限 —— 持续产出（长文本生成、多轮工具调用）哪怕远超数分钟也绝不截断，只有持续收不到任何会话事件（真停滞）才显式报错收流；同 `timeoutMs`（同步入口停滞阈值，默认 180s）、`stallTimeoutMs`（流式入口停滞收流阈值，默认 300s）。所有 SSE 通道每 15s 下发一遍 `': ping'` 注释帧心跳，防中间代理/网关在长沉默期掐流；流内任意内部错误都会以 `error` 事件显式可见（不再无声消失）。
 5. **OpenAI 兼容协议**：
    - `POST /chat/completions`：支持标准 OpenAI 客户端调用（兼容 `stream: true/false`）。
 6. **交互式 Web UI 文档 & OpenAPI 规范**：

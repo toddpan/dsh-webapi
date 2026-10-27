@@ -337,6 +337,7 @@ export function readRawBody(req: IncomingMessage, maxBytes: number): Promise<Buf
 /** 开启 SSE 流式通道 */
 export function initSseStream(res: ServerResponse): {
   send: (event: string, data: any) => void
+  ping: () => void
   close: () => void
 } {
   res.statusCode = 200
@@ -351,6 +352,11 @@ export function initSseStream(res: ServerResponse): {
       if (res.writableEnded) return
       const text = typeof data === 'string' ? data : JSON.stringify(data)
       res.write(`event: ${event}\ndata: ${text}\n\n`)
+    },
+    /** SSE 注释帧心跳：标准 SSE 解析器忽略 `: ...` 行，用于防中间层空闲掐断长流 */
+    ping() {
+      if (res.writableEnded) return
+      res.write(': ping\n\n')
     },
     close() {
       if (!res.writableEnded) {

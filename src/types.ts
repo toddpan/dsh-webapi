@@ -78,7 +78,10 @@ export interface SessionPromptInput {
     data: string // base64 encoded
   }>
   mode?: 'normal' | 'steer'
+  /** 同步接口：停滞阈值（毫秒）——超过该时长无任何会话事件则报错；默认 180000（不再是总时长上限） */
   timeoutMs?: number
+  /** 流式接口（prompt-stream）：停滞收流阈值（毫秒）——超过该时长无任何会话事件则收流报错；默认 300000 */
+  stallTimeoutMs?: number
 }
 
 export interface SessionHistoryQuery {

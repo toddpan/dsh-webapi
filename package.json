@@ -1,6 +1,6 @@
 {
   "name": "dsh-web-service",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Expose DSH over HTTP: 80+ REST + SSE routes for workspaces, sessions (streaming, history, stats, todos, cancel), models, settings, API keys, skills and files, plus an OpenAI-compatible /chat/completions and a settings page that starts/stops the independent fixed-port API service and manages API keys. · 把 DSH 的能力开放成 REST + SSE 接口与 OpenAI 兼容端点；设置页可启停独立固定端口服务（端口/监听范围/实时地址）并管理 API Key，供三方控制台、客户端与 Agent 集成。",
   "type": "module",
   "main": "./lib/index.js",
