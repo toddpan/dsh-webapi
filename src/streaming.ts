@@ -7,6 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { initSseStream, sendJson } from './router.js'
 import { askSessionStorage } from './user-questions.js'
+import { currentAgentModel } from './session-model.js'
 import type { OpenAiChatCompletionRequest, SessionPromptInput } from './types.js'
 
 export function registerStreamingRoutes(ctx: Context, router: any): void {
@@ -637,15 +638,16 @@ async function executePromptAndWait(
 
 /**
  * 解析会话当前实际使用的模型（provider/model），供 OpenAI 兼容响应透传。
- * 优先取 agent 的模型选择，否则取会话 request/header 的 config，二者都无则 undefined。
+ * 优先取 agent 的模型选择；没有现代运行模型 API 时兼容旧选择记录与 request/header。
  */
 async function readSessionModel(ctx: Context, sessionId: string): Promise<string | undefined> {
   try {
     const sessionController = ctx.get('sessionController') as any
     const agentsService = ctx.get('agents') as any
     const agent = agentsService?.get ? agentsService.get(sessionId) : undefined
-    const selection = sessionController?.agents?.selectionFor?.(agent)?.current
+    const selection = currentAgentModel(agent, sessionController)
     if (selection?.provider && selection?.model) return `${selection.provider}/${selection.model}`
+    if (typeof agent?.model?.current === 'function') return undefined
     const sessionsService = ctx.get('sessions') as any
     const live = sessionsService?.get ? sessionsService.get(sessionId) : undefined
     const hdr = live?.requestHeader?.()

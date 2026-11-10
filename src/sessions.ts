@@ -7,6 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { sendJson } from './router.js'
 import { discoverSkills, resolveSkillRoot } from './skill-utils.js'
+import { currentAgentModel } from './session-model.js'
 import type { WebServiceConfig } from './types.js'
 import type { SessionCreateInput, SessionItem, SessionUpdateInput, SessionHistoryMessage } from './types.js'
 
@@ -445,18 +446,13 @@ export function registerSessionRoutes(ctx: Context, router: any, config: WebServ
       const agent = agentsService?.get ? agentsService.get(sessionId) : undefined
       const isRunning = agent?.status === 'running'
 
-      // 获取当前会话使用的模型
-      let currentModel: any = undefined
-      if (sessionController?.agents?.selectionFor && agent) {
-        const selection = sessionController.agents.selectionFor(agent)?.current
-        if (selection) {
-          currentModel = {
-            provider: selection.provider,
-            model: selection.model,
-            reasoningEffort: selection.reasoningEffort,
-          }
-        }
-      }
+      // 获取当前运行模型；只回传公开选择字段，避免泄漏模型适配器配置。
+      const selection = currentAgentModel(agent, sessionController)
+      const currentModel = selection ? {
+        provider: selection.provider,
+        model: selection.model,
+        reasoningEffort: selection.reasoningEffort,
+      } : undefined
 
       const item: SessionItem = {
         id: String(meta.id),
@@ -616,10 +612,7 @@ export function registerSessionRoutes(ctx: Context, router: any, config: WebServ
             // 单独调强度：读当前 selection 合并，避免把模型选择清掉
             const agentsService = ctx.get('agents') as any
             const agent = agentsService?.get ? agentsService.get(sessionId) : undefined
-            const current =
-              agent && sessionController.agents?.selectionFor
-                ? sessionController.agents.selectionFor(agent)?.current
-                : undefined
+            const current = currentAgentModel(agent, sessionController)
             if (!current?.provider || !current?.model) {
               sendJson(res, 400, {
                 ok: false,

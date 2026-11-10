@@ -36,7 +36,17 @@ curl -sI http://127.0.0.1:3080/api/v1/docs           # HTTP/1.1 200 OK
 
 > **升级提示。** 资产名不带版本号，`latest/download/dsh-web-service.tgz` 对**全新安装**永远指向最新构建；
 > 但包管理器可能复用该 URL 的旧解析结果。要把已有安装切到确定版本，用带版本号的资产：
-> `dsh plugin --profile web add https://github.com/toddpan/dsh-webapi/releases/download/v0.1.11/dsh-web-service-0.1.11.tgz`
+> `dsh plugin --profile web add https://github.com/toddpan/dsh-webapi/releases/download/v0.6.2/dsh-web-service-0.6.2.tgz`
+
+同一个预构建包也发布至 npm：
+
+```bash
+dsh plugin --profile web add dsh-web-service@0.6.2
+```
+
+请使用实际运行 API 服务的 profile（Desktop 安装将 `web` 换成 `desktop`）。升级后检查
+`/api/v1/system/status` 的插件版本为 `0.6.2`；如果运行进程仍返回旧版，重启 DSH 后复查。
+会话模型兼容修复详见 [v0.6.2 版本说明](CHANGELOG.md)。
 
 **方式二：直接从 git 仓库安装**（插件管理器的「GitHub 仓库地址」安装方式）
 

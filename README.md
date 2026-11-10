@@ -37,7 +37,17 @@ curl -sI http://127.0.0.1:3080/api/v1/docs           # HTTP/1.1 200 OK
 > **Upgrading.** The asset name carries no version, so `latest/download/dsh-web-service.tgz` always
 > points at the newest build for a *fresh* install — but package managers may reuse a cached
 > resolution of that URL. To move an existing install to a known build, pin the versioned asset:
-> `dsh plugin --profile web add https://github.com/toddpan/dsh-webapi/releases/download/v0.1.11/dsh-web-service-0.1.11.tgz`
+> `dsh plugin --profile web add https://github.com/toddpan/dsh-webapi/releases/download/v0.6.2/dsh-web-service-0.6.2.tgz`
+
+The same prebuilt package is available on npm:
+
+```bash
+dsh plugin --profile web add dsh-web-service@0.6.2
+```
+
+Use the profile that runs your API service (`desktop` instead of `web` for a Desktop install).
+After upgrading, verify `/api/v1/system/status` reports `0.6.2`; restart DSH if the running service
+still reports an older version. See [v0.6.2 release notes](CHANGELOG.md) for the session model fix.
 
 **Option 2: install straight from the git repo** (the "GitHub repository" install in the plugin manager)
 
