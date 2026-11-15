@@ -18,11 +18,15 @@ export interface RouteEntry {
     handler: RouteHandler;
     /** true = 跳过 JSON 解析，把原始请求体 Buffer 交给 handler（文件上传用） */
     rawBody?: boolean;
+    /** Leave body parsing to an authenticated handler (bounded admin-only JSON). */
+    deferBody?: boolean;
     /** 鉴权模式，默认 data */
     auth?: RouteAuthMode;
 }
 export interface RouteOptions {
     rawBody?: boolean;
+    /** Handler must authenticate before reading a bounded request body. */
+    deferBody?: boolean;
     auth?: RouteAuthMode;
 }
 /** 数据面鉴权服务（由 api-keys-store 提供；未注入时回落到单 config.apiKey 比对） */

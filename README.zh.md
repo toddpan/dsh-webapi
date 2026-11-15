@@ -197,6 +197,41 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
 
 数据文件位于 `<DSH_HOME>/dsh-web-service/api-keys.json`（0600）。
 
+## 管理员模型只读检查（P0）
+
+`GET /api/v1/model-config/inspect?runtime=dsh` 是独立的**仅管理员、只读**管理桥。
+必须使用已有 Admin Token（`X-Admin-Token` 或 `Authorization: Bearer <admin-token>`），
+不是节点普通 managed/legacy API Key；关闭数据面鉴权也不会把此接口开放。
+复用 API Key 管理守卫：默认仅回环、浏览器同源、显式 `adminRemoteAccess: true` 才允许远端对端、
+失败限流，以及 `Cache-Control: no-store`。隧道/反向代理仍需网络层收口，不能将回环判定当作远端身份验证。
+
+```bash
+# BASE 来自设置页服务地址；ADMIN_TOKEN 必须单独登记，不能填普通 API Key。
+curl -s "$BASE/model-config/inspect?runtime=dsh" -H "X-Admin-Token: $ADMIN_TOKEN"
+```
+
+成功结构：`{ok:true,data:{version:1,runtime:"dsh",instanceId,supported:true,source:"node-manager",
+capabilities,nodeDefault?,models,activation:"future-sessions"},timestamp}`。
+
+- `nodeDefault` 仅 `provider`、`model`、可选 `reasoningEffort`。
+- `models[]` 仅 `provider`、`id`、`name`、`isDefault`、可选 `routeOnly:true`。
+  routeOnly 是路由占位条目，不是已验证的上游模型 ID，也不代表 Codex 路由能力。
+- `capabilities` 固定为 `{inspect:true,preview:false,apply:false,rollback:false,providers:false,
+  secrets:false,routing:false,conditionalWrite:"none"}`。不返回凭据 configured 元数据、原始
+  settings/schema/headers/provider 对象或上游错误正文。
+- `instanceId` 是随机模块/进程运行代次，重启/重载变化，**不是持久机器/profile/config-root 身份**。
+  P0 **不返回 revision**：目录和默认值是独立读取，不构成原子快照或写入 fence，不宣称 durable/外部写入者 CAS。
+  `future-sessions` 说明默认值作用范围，不会迁移运行中的会话。
+
+runtime 省略时默认 dsh；其他运行时或缺失/不兼容宿主只读能力返回 `501 NOT_SUPPORTED`。
+目录失败返回 `503 MODEL_CATALOG_UNAVAILABLE`，与成功空目录/routeOnly 区分；其他读取/存储异常
+返回固定 `503 MODEL_CONFIG_UNAVAILABLE`，不透传异常正文。权限错误为 `401 ADMIN_UNAUTHORIZED`、
+`403 FORBIDDEN_ORIGIN` / `FORBIDDEN_REMOTE` 或 `429 RATE_LIMITED`。
+
+P0 不注册 preview/apply/rollback/providers/secrets/default 写路由。
+既有 `PUT /models/default` 和 `PATCH /settings/:namespace` 仍是 legacy 数据面接口；新桥不赋予它们
+revision、仅管理员或回滚保证。条件操作失败/不支持时，不得降级调用 legacy 写接口伪造条件写入。
+
 ## 功能特性
 
 1. **工作区管理 (Workspaces)**：添加、删除、修改、查询工作区及其关联会话。
@@ -250,6 +285,7 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
 | | `GET` | `/sessions/:id/events` | SSE 会话全局事件监听订阅 |
 | | `POST` | `/sessions/:id/prompt` | 同步等待对话结果 |
 | **OpenAI** | `POST` | `/chat/completions` | 兼容 OpenAI Chat 协议 (流式/非流式) |
+| **Model Config (Admin)** | `GET` | `/model-config/inspect?runtime=dsh` | P0 安全只读 DTO，独立 Admin Token，无写入/CAS |
 | **Models** | `GET` | `/models` | 查询可用模型清单与默认模型 |
 | | `GET` | `/models/default` | 获取全局默认模型 |
 | | `PUT` | `/models/default` | 更新全局默认模型 |
@@ -277,6 +313,17 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
 | | `GET` | `/openapi.json` | OpenAPI 3.0 接口定义 |
 
 ## 开发与构建
+
+模型配置离线验证（不启动 listener、不访问真实 DSH 配置）：
+
+```bash
+node scripts/test-model-config.mjs  # 将当前 src 编译到临时目录，再运行 fixtures
+node_modules/.bin/tsc -p tsconfig.json --noEmit
+```
+
+已有正确 peer 链接时，可用 `node_modules/.bin/tsc -p tsconfig.json --noEmitOnError` 安全原地生成
+`lib/` 与 `lib/types/`，不清理/重链依赖。需复核产物差异，保持 `client/client.js` 与 `lib/client.js`
+等价；不要为测试顺带安装/重载真实服务。
 
 ```bash
 # 构建插件

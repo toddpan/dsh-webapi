@@ -28,6 +28,7 @@
  *   3) 必须携带 admin token（Authorization: Bearer / X-Admin-Token）；失败限流后短路拒绝
  *   —— 持有普通 API Key 的三方客户端不能调用这些接口。
  */
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { HttpRouter } from './router.js';
 import { ApiKeyStore } from './api-keys-store.js';
 import type { BindIp, ServiceState } from './service-settings.js';
@@ -36,6 +37,8 @@ export interface AdminGuardOptions {
     /** 允许非回环地址访问管理接口（默认 false） */
     adminRemoteAccess?: boolean;
 }
+/** 返回 true 表示请求已被本函数终结（未通过管理面鉴权） */
+export declare function rejectAdmin(req: IncomingMessage, res: ServerResponse, store: ApiKeyStore, opts: AdminGuardOptions): Promise<boolean>;
 export interface ApiKeyRouteOptions {
     /**
      * 解析主 webserver 实际监听端口（每次渲染页面时调用——桌面端 GUI 端口随启动变化，

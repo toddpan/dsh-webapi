@@ -215,6 +215,45 @@ cat "${DSH_HOME:-$HOME/.dsh}/dsh-web-service/admin-token"
 
 The store lives at `<DSH_HOME>/dsh-web-service/api-keys.json` (mode 0600).
 
+## Administrator model inspection (P0)
+
+`GET /api/v1/model-config/inspect?runtime=dsh` is a separate **admin-only, read-only** bridge.
+Use the existing Admin Token (`X-Admin-Token` or `Authorization: Bearer <admin-token>`), not the
+node's ordinary managed/legacy API key. Disabling data-plane auth does not make this route public.
+It reuses the API-key management guard: loopback by default, same-origin browser requests,
+`adminRemoteAccess: true` to permit remote peers, failure rate limiting, and `Cache-Control: no-store`.
+A tunnel/reverse proxy still needs network-layer access control; see the guard caveats above.
+
+```bash
+# BASE is the service URL from the settings page; ADMIN_TOKEN is separately enrolled.
+curl -s "$BASE/model-config/inspect?runtime=dsh" -H "X-Admin-Token: $ADMIN_TOKEN"
+```
+
+Success is `{ok:true,data:{version:1,runtime:"dsh",instanceId,supported:true,source:"node-manager",
+capabilities,nodeDefault?,models,activation:"future-sessions"},timestamp}`:
+
+- `nodeDefault` contains only `provider`, `model`, and optional `reasoningEffort`.
+- `models[]` contains only `provider`, `id`, `name`, `isDefault`, and optional `routeOnly: true`.
+  A route-only placeholder is not a verified upstream model ID or a Codex routing capability.
+- `capabilities` is `{inspect:true,preview:false,apply:false,rollback:false,providers:false,
+  secrets:false,routing:false,conditionalWrite:"none"}`. No credential/configured-state metadata,
+  raw settings, schemas, headers, provider objects, or upstream error bodies are exposed.
+- `instanceId` is an opaque module/process incarnation, changes on restart/reload, and is **not**
+  a durable node/profile/configuration identity. P0 returns **no revision**: default and catalog
+  are independent reads, not an atomic snapshot or a write fence. No durable/external-writer CAS
+  is claimed. `future-sessions` describes the default's scope; active sessions are not migrated.
+
+`runtime` defaults to `dsh`. Other runtimes or missing/incompatible host read seams return
+`501 NOT_SUPPORTED`. Catalog failures return `503 MODEL_CATALOG_UNAVAILABLE`, distinct from a
+successful empty/route-only catalog; other read/store exceptions return fixed
+`503 MODEL_CONFIG_UNAVAILABLE`. Auth failures are `401 ADMIN_UNAUTHORIZED`,
+`403 FORBIDDEN_ORIGIN` / `FORBIDDEN_REMOTE`, or `429 RATE_LIMITED`.
+
+P0 registers no preview/apply/rollback/provider/secret/default-write route. Existing
+`PUT /models/default` and `PATCH /settings/:namespace` remain legacy data-plane endpoints;
+this bridge does not grant them revision, admin-only, or rollback guarantees. Do not fall back
+to them to emulate a failed/unsupported conditional operation.
+
 ## Features
 
 1. **Workspaces** — create, update, delete and list workspaces and their sessions.
@@ -275,6 +314,7 @@ Default prefix: `/api/v1`
 | | `GET` | `/sessions/:id/events` | Subscribe to the session event bus as SSE |
 | | `POST` | `/sessions/:id/prompt` | Send a prompt and wait for the result synchronously |
 | **OpenAI** | `POST` | `/chat/completions` | OpenAI Chat protocol (streaming and non-streaming) |
+| **Model Config (Admin)** | `GET` | `/model-config/inspect?runtime=dsh` | P0 safe read-only DTO; separate Admin Token; no writes/CAS |
 | **Models** | `GET` | `/models` | Available models and the default model |
 | | `GET` | `/models/default` | Read the global default model |
 | | `PUT` | `/models/default` | Update the global default model |
@@ -302,6 +342,18 @@ Default prefix: `/api/v1`
 | | `GET` | `/openapi.json` | OpenAPI 3.0 document |
 
 ## Development
+
+Offline model-config validation (no listener or real DSH settings):
+
+```bash
+node scripts/test-model-config.mjs  # compiles current src into disposable output, then fixture tests
+node_modules/.bin/tsc -p tsconfig.json --noEmit
+```
+
+When peers are already correctly linked, safe in-place emission is
+`node_modules/.bin/tsc -p tsconfig.json --noEmitOnError` (`outDir=lib`, `declarationDir=lib/types`).
+It does not clean/relink dependencies. Verify the generated diff and keep the browser half
+`client/client.js` equivalent to `lib/client.js`; do not install/reload a live plugin just to test.
 
 ```bash
 # Build the plugin

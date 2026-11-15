@@ -15,6 +15,9 @@ import { HttpRouter, sendJson } from './router.js'
 import { registerWorkspaceRoutes } from './workspaces.js'
 import { registerSessionRoutes } from './sessions.js'
 import { registerModelRoutes } from './models.js'
+import { registerModelConfigRoutes } from './model-config.js'
+import { registerNativeModelConfigRoutes } from './model-config-native.js'
+import { registerModelNodeBridgeRoutes } from './model-config-node.js'
 import { registerStreamingRoutes } from './streaming.js'
 import { registerFileRoutes } from './files.js'
 import { registerFsRoutes } from './fs.js'
@@ -131,6 +134,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   registerWorkspaceRoutes(ctx, router)
   registerSessionRoutes(ctx, router, config)
   registerModelRoutes(ctx, router)
+  registerModelConfigRoutes(ctx, router, config, keyStore)
+  // Native settings CAS: observed-namespace preview/apply/rollback; fails closed on older hosts.
+  registerNativeModelConfigRoutes(ctx, router, config, keyStore)
+  // Fixed-allowlist bridge to the WorkBuddy model node sidecar; fails closed when absent.
+  registerModelNodeBridgeRoutes(ctx, router, config, keyStore)
   registerStreamingRoutes(ctx, router)
   registerFileRoutes(ctx, router, config)
   registerFsRoutes(router, config)

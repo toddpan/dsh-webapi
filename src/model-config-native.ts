@@ -1,0 +1,442 @@
+/** Narrow native settings edits. Observed-namespace fencing, NOT durable external-writer CAS. */
+import { createHash, randomUUID } from 'node:crypto'
+import type { Context } from '@deepseek-ai/cordis'
+import { rejectAdmin } from './api-keys.js'
+import type { ApiKeyStore } from './api-keys-store.js'
+import { modelConfigInstanceId } from './model-config.js'
+import { HttpRouter, readJsonBody, sendJson } from './router.js'
+import type { WebServiceConfig } from './types.js'
+
+type Scalar = string | number
+type Fields = Record<string, Scalar>
+type Target = { kind: 'default' } | { kind: 'provider'; provider: string }
+export interface NativeRevision {
+  instanceId: string
+  namespace: string
+  revision: number
+  fingerprint: string
+}
+interface Snapshot {
+  target: Target
+  namespace: string
+  path: string[]
+  fields: string[]
+  values: Fields
+  base: Fields
+  user: Fields
+  fence: NativeRevision
+  controller: Record<string, unknown>
+  mutate: (ns: string, ops: PathOp[], revision: number) => Promise<unknown>
+}
+type PathOp = { op: 'set'; path: string[]; value: Scalar } | { op: 'unset'; path: string[] }
+interface Plan {
+  id: string
+  binding: string
+  requestId: string
+  expiresAt: number
+  before: Snapshot
+  after: { values: Fields; user: Fields }
+  ops: PathOp[]
+  used: boolean
+}
+interface Receipt {
+  operationId: string
+  persisted: boolean | 'unknown'
+  verified: boolean
+  rollbackAvailable: boolean
+  conditionalWrite: 'observed-namespace'
+  revision?: NativeRevision
+}
+interface Outcome { status: number; code?: string; data: Receipt }
+interface Operation {
+  binding: string
+  expiresAt: number
+  result: Promise<Outcome>
+  before?: Snapshot
+  post?: Snapshot
+  rolledBack?: boolean
+}
+class Refusal extends Error {
+  constructor(readonly status: number, readonly code: string) { super(code) }
+}
+const DEFAULT_FIELDS = ['provider', 'model', 'reasoningEffort']
+const PROVIDER_FIELDS = ['displayName', 'baseURL', 'api', 'timeoutMs']
+const PROTOCOLS = ['openai-completions', 'openai-responses', 'anthropic-messages']
+const PLAN_TTL = 60_000
+const OP_TTL = 5 * 60_000
+const LIMIT = 256
+const bad = (): never => { throw new Refusal(400, 'BAD_REQUEST') }
+const unsupported = (): never => { throw new Refusal(501, 'NOT_SUPPORTED') }
+const conflict = (): never => { throw new Refusal(409, 'REVISION_CONFLICT') }
+function object(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+function plain(value: unknown): value is Record<string, unknown> {
+  return object(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value))
+}
+function short(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 1024
+    && value.trim().length > 0 && !/[\u0000-\u001f\u007f]/.test(value)
+}
+function id(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(value)
+    && !['__proto__', 'prototype', 'constructor'].includes(value)
+}
+function exact(value: unknown, keys: string[]): Record<string, unknown> {
+  if (!plain(value) || Object.keys(value).some(key => !keys.includes(key))) return bad()
+  return value
+}
+function targetOf(value: unknown): Target {
+  const t = exact(value, ['kind', 'provider'])
+  if (t.kind === 'default' && t.provider === undefined) return { kind: 'default' }
+  if (t.kind === 'provider' && id(t.provider)) return { kind: 'provider', provider: t.provider }
+  return bad()
+}
+function fenceOf(value: unknown): NativeRevision {
+  const v = exact(value, ['instanceId', 'namespace', 'revision', 'fingerprint'])
+  if (typeof v.instanceId !== 'string' || !short(v.namespace)
+    || !Number.isSafeInteger(v.revision) || (v.revision as number) < 0
+    || typeof v.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(v.fingerprint)) return bad()
+  return { instanceId: v.instanceId, namespace: v.namespace, revision: v.revision as number, fingerprint: v.fingerprint }
+}
+function same(a: unknown, b: unknown): boolean { return JSON.stringify(a) === JSON.stringify(b) }
+function checkFence(actual: NativeRevision, expected: NativeRevision): void {
+  if (!same(actual, expected)) conflict()
+}
+function hash(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex') }
+function at(root: unknown, path: string[]): Record<string, unknown> | undefined {
+  let value = root
+  for (const part of path) {
+    if (value === undefined) return undefined
+    if (!object(value)) return unsupported()
+    value = Object.hasOwn(value, part) ? value[part] : undefined
+  }
+  if (value === undefined) return undefined
+  if (!object(value)) return unsupported()
+  return value
+}
+function validField(target: Target, key: string, value: unknown): value is Scalar {
+  if (key === 'timeoutMs') return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= 2_147_483_647
+  if (!short(value)) return false
+  if (target.kind === 'default') return key !== 'provider' || id(value)
+  if (key === 'api') return PROTOCOLS.includes(value)
+  if (key === 'baseURL') {
+    try {
+      const url = new URL(value)
+      // Never project/persist inline authentication, query tokens or fragments.
+      return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
+        && Boolean(url.hostname) && value.length <= 1024
+    } catch { return false }
+  }
+  return key === 'displayName'
+}
+function project(root: Record<string, unknown> | undefined, fields: string[], target: Target): Fields {
+  const result: Fields = {}
+  for (const field of fields) {
+    const value = root && Object.hasOwn(root, field) ? root[field] : undefined
+    if (value === undefined) continue
+    if (!validField(target, field, value)) return unsupported()
+    result[field] = value
+  }
+  return result
+}
+function canonical(target: Target): string { return target.kind === 'default' ? 'agent-default-model' : `provider:${target.provider}` }
+function requestId(value: unknown): string {
+  if (!id(value) || value.length < 8) return bad()
+  return value
+}
+function bodyRuntime(value: unknown): void { if (value !== undefined && value !== 'dsh') unsupported() }
+function fieldsEqual(a: Fields, b: Fields): boolean {
+  return same(Object.entries(a).sort(), Object.entries(b).sort())
+}
+
+export function registerNativeModelConfigRoutes(
+  ctx: Context, router: HttpRouter, config: WebServiceConfig, store: ApiKeyStore,
+): void {
+  const plans = new Map<string, Plan>()
+  const requests = new Map<string, Plan>()
+  const operations = new Map<string, Operation>()
+  const queues = new Map<string, Promise<unknown>>()
+  const guard = { adminRemoteAccess: config.adminRemoteAccess === true }
+  function prune(): void {
+    const now = Date.now()
+    for (const [key, plan] of requests) if (plan.expiresAt <= now) requests.delete(key)
+    for (const [key, plan] of plans) if (plan.expiresAt <= now) plans.delete(key)
+    for (const [key, op] of operations) if (op.expiresAt <= now) operations.delete(key)
+  }
+  function serialize<T>(namespace: string, work: () => Promise<T>): Promise<T> {
+    const previous = queues.get(namespace) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(work)
+    queues.set(namespace, next)
+    void next.finally(() => { if (queues.get(namespace) === next) queues.delete(namespace) }).catch(() => undefined)
+    return next
+  }
+  async function read(target: Target): Promise<Snapshot> {
+    const controller = ctx.get('settingsController') as unknown
+    const llm = ctx.get('llm') as unknown
+    if (!object(controller) || !object(llm)) return unsupported()
+    const describe = controller.describe
+    const mutate = controller.mutate
+    const directory = llm.listConfigurableProviders
+    if (typeof describe !== 'function' || typeof mutate !== 'function' || typeof directory !== 'function') return unsupported()
+    const entries: unknown = await directory.call(llm)
+    if (!Array.isArray(entries)) return unsupported()
+    let namespace = 'agent-default-model'
+    let path: string[] = []
+    const fields = target.kind === 'default' ? DEFAULT_FIELDS : PROVIDER_FIELDS
+    if (target.kind === 'provider') {
+      const matches = entries.filter(item => object(item) && item.provider === target.provider)
+      if (matches.length !== 1) return unsupported()
+      const entry = matches[0] as Record<string, unknown>
+      const ns = entry.settingsNs
+      const locator = entry.settingsPath
+      // Only the observed pi-ai adapter shape; never arbitrary namespaces/paths.
+      if (ns !== 'llm-pi-ai' || !Array.isArray(locator) || !same(locator, ['providers', target.provider])) return unsupported()
+      namespace = ns
+      path = ['providers', target.provider]
+    }
+    const description: unknown = await describe.call(controller)
+    if (!object(description) || description.writable !== true || !Array.isArray(description.namespaces)) return unsupported()
+    const matches = description.namespaces.filter(item => object(item) && item.ns === namespace)
+    if (matches.length !== 1) return unsupported()
+    const descriptor = matches[0] as Record<string, unknown>
+    const revision = descriptor.revision
+    if (!Number.isSafeInteger(revision) || (revision as number) < 0) return unsupported()
+    const resolved = at(descriptor.value, path)
+    if (!resolved) return unsupported() // Provider creation is not owned here.
+    const values = project(resolved, fields, target)
+    const base = project(at(descriptor.base, path), fields, target)
+    const user = project(at(descriptor.user, path), fields, target)
+    if (target.kind === 'default' && (!values.provider || !values.model)) return unsupported()
+    // Stable ordering of the allowlisted projection. Unknown fields and secrets
+    // never enter a response, hash, preview, log, or rollback snapshot.
+    const fingerprint = hash([target, namespace, path, fields.map(key => [key, values[key] ?? null, base[key] ?? null, user[key] ?? null])])
+    return { target, namespace, path, fields, values, base, user,
+      fence: { instanceId: modelConfigInstanceId, namespace, revision: revision as number, fingerprint },
+      controller, mutate: mutate.bind(controller) }
+  }
+  function view(snapshot: Snapshot) {
+    return { version: 1, runtime: 'dsh', instanceId: modelConfigInstanceId, source: 'node-manager',
+      target: snapshot.target, revision: snapshot.fence, values: snapshot.values,
+      editableFields: snapshot.fields, capabilities: { inspect: true, preview: true, apply: true,
+        rollback: true, providers: snapshot.target.kind === 'provider', secrets: false, routing: false,
+        conditionalWrite: 'observed-namespace' },
+      scope: 'observed-namespace', persisted: false, verified: true }
+  }
+  async function validateDefault(values: Fields): Promise<void> {
+    if (typeof values.provider !== 'string' || typeof values.model !== 'string') return bad()
+    const controller = ctx.get('sessionController') as unknown
+    if (!object(controller) || typeof controller.modelCatalog !== 'function') return unsupported()
+    const catalog: unknown = await controller.modelCatalog()
+    if (!object(catalog) || !Array.isArray(catalog.groups)) return unsupported()
+    if (catalog.failures !== undefined && (!Array.isArray(catalog.failures) || catalog.failures.length > 0)) {
+      throw new Refusal(503, 'MODEL_CATALOG_UNAVAILABLE')
+    }
+    const models = catalog.groups.flatMap(group => object(group) && group.id === values.provider && Array.isArray(group.models) ? group.models : [])
+    const model = models.find(item => object(item) && item.id === values.model)
+    if (!object(model)) return bad() // No guessed model on a route-only provider.
+    if (values.reasoningEffort !== undefined) {
+      const reasoning = model.reasoning
+      if (!object(reasoning) || !Array.isArray(reasoning.efforts)
+        || !reasoning.efforts.some(item => object(item) && item.id === values.reasoningEffort)) return bad()
+    }
+  }
+  function patched(snapshot: Snapshot, patch: unknown): { values: Fields; user: Fields; ops: PathOp[] } {
+    const p = exact(patch, snapshot.fields)
+    const keys = Object.keys(p).sort()
+    if (!keys.length) return bad()
+    const user = { ...snapshot.user }
+    const ops: PathOp[] = []
+    for (const key of keys) {
+      const value = p[key]
+      if (value === null) {
+        if (snapshot.target.kind === 'default' && key !== 'reasoningEffort') return bad()
+        delete user[key]
+        ops.push({ op: 'unset', path: [...snapshot.path, key] })
+      } else {
+        if (!validField(snapshot.target, key, value)) return bad()
+        user[key] = value
+        ops.push({ op: 'set', path: [...snapshot.path, key], value })
+      }
+    }
+    const values = { ...snapshot.base, ...user }
+    // Unchanged effective fields may come from schema defaults, not base/user.
+    for (const key of snapshot.fields) if (!keys.includes(key) && snapshot.values[key] !== undefined) values[key] = snapshot.values[key]
+    if (snapshot.target.kind === 'default' && (!values.provider || !values.model)) return bad()
+    return { values, user, ops }
+  }
+  function previewView(plan: Plan) {
+    return { previewId: plan.id, requestId: plan.requestId, expiresAt: plan.expiresAt,
+      target: plan.before.target, expectedRevision: plan.before.fence,
+      before: plan.before.values, after: plan.after.values, conditionalWrite: 'observed-namespace',
+      persisted: false, verified: false }
+  }
+  async function write(
+    operationId: string, snapshot: Snapshot, ops: PathOp[], desired: { values: Fields; user: Fields }, op: Operation,
+  ): Promise<Outcome> {
+    const data: Receipt = { operationId, persisted: 'unknown', verified: false,
+      rollbackAvailable: false, conditionalWrite: 'observed-namespace' }
+    try {
+      await snapshot.mutate(snapshot.namespace, ops, snapshot.fence.revision)
+      data.persisted = true // Host acknowledged persistence, not runtime activation.
+    } catch (error: unknown) {
+      const code = object(error) ? error.code : undefined
+      if (code === 'settings/conflict' || code === 'SETTINGS_CONFLICT') {
+        data.persisted = false
+        return { status: 409, code: 'REVISION_CONFLICT', data }
+      }
+      if (code === 'settings/rejected') data.persisted = false
+      return { status: 503, code: 'NATIVE_WRITE_UNCONFIRMED', data }
+    }
+    try {
+      const post = await read(snapshot.target)
+      if (post.controller !== snapshot.controller || post.fence.revision < snapshot.fence.revision
+        || !fieldsEqual(post.user, desired.user) || !fieldsEqual(post.values, desired.values)) {
+        return { status: 503, code: 'NATIVE_READBACK_UNVERIFIED', data }
+      }
+      data.verified = true
+      data.revision = post.fence
+      op.post = post
+      data.rollbackAvailable = op.before !== undefined
+      return { status: 200, data }
+    } catch {
+      return { status: 503, code: 'NATIVE_READBACK_UNVERIFIED', data }
+    }
+  }
+  function cached(id: string, binding: string): Promise<Outcome> | undefined {
+    const existing = operations.get(id)
+    if (!existing) return undefined
+    if (existing.binding !== binding) throw new Refusal(409, 'IDEMPOTENCY_CONFLICT')
+    return existing.result
+  }
+  function respond(res: Parameters<typeof sendJson>[0], outcome: Outcome): void {
+    sendJson(res, outcome.status, outcome.code
+      ? { ok: false, code: outcome.code, error: 'Native model configuration operation was not confirmed', data: outcome.data }
+      : { ok: true, data: outcome.data })
+  }
+  async function runApply(body: Record<string, unknown>): Promise<Outcome> {
+    exact(body, ['runtime', 'previewId', 'expectedRevision', 'operationId'])
+    bodyRuntime(body.runtime)
+    const operationId = requestId(body.operationId)
+    const expected = fenceOf(body.expectedRevision)
+    if (!id(body.previewId)) return bad()
+    const binding = hash(['apply', body.previewId, expected])
+    const replay = cached(operationId, binding)
+    if (replay) return replay
+    const plan = plans.get(body.previewId)
+    if (!plan || plan.expiresAt <= Date.now()) throw new Refusal(409, 'PREVIEW_EXPIRED')
+    checkFence(plan.before.fence, expected)
+    if (plan.used) throw new Refusal(409, 'PLAN_CONSUMED')
+    if (operations.size >= LIMIT) throw new Refusal(503, 'CAPACITY_EXCEEDED')
+    plan.used = true
+    const op: Operation = { binding, expiresAt: Date.now() + OP_TTL, result: Promise.resolve(undefined as never), before: plan.before }
+    op.result = serialize(plan.before.namespace, async () => {
+      if (plan.expiresAt <= Date.now()) throw new Refusal(409, 'PREVIEW_EXPIRED')
+      const current = await read(plan.before.target)
+      checkFence(current.fence, expected)
+      if (current.controller !== plan.before.controller) return conflict()
+      if (current.target.kind === 'default') await validateDefault(plan.after.values)
+      // Re-read after catalog validation awaited: no stale user snapshot is used.
+      const fresh = await read(plan.before.target)
+      checkFence(fresh.fence, expected)
+      if (fresh.controller !== plan.before.controller) return conflict()
+      return write(operationId, fresh, plan.ops, plan.after, op)
+    })
+    operations.set(operationId, op)
+    return op.result
+  }
+  async function runRollback(body: Record<string, unknown>): Promise<Outcome> {
+    exact(body, ['runtime', 'appliedOperationId', 'expectedRevision', 'operationId'])
+    bodyRuntime(body.runtime)
+    const operationId = requestId(body.operationId)
+    const appliedId = requestId(body.appliedOperationId)
+    if (operationId === appliedId) return bad()
+    const expected = fenceOf(body.expectedRevision)
+    const binding = hash(['rollback', appliedId, expected])
+    const replay = cached(operationId, binding)
+    if (replay) return replay
+    const original = operations.get(appliedId)
+    if (!original?.before || !original.post || original.rolledBack) throw new Refusal(409, 'ROLLBACK_UNAVAILABLE')
+    if (operations.size >= LIMIT) throw new Refusal(503, 'CAPACITY_EXCEEDED')
+    const before = original.before
+    const post = original.post
+    const op: Operation = { binding, expiresAt: Date.now() + OP_TTL, result: Promise.resolve(undefined as never) }
+    op.result = serialize(before.namespace, async () => {
+      const current = await read(before.target)
+      checkFence(current.fence, expected)
+      if (current.controller !== post.controller || current.fence.fingerprint !== post.fence.fingerprint) return conflict()
+      if (before.target.kind === 'default') await validateDefault(before.values)
+      const fresh = await read(before.target)
+      checkFence(fresh.fence, expected)
+      if (fresh.controller !== post.controller) return conflict()
+      // Restore only fields the preview touched. Missing prior user values mean
+      // unset/inherit; never replace a whole namespace/profile from a redacted view.
+      const plan = [...plans.values()].find(p => p.before === before)
+      if (!plan) throw new Refusal(409, 'ROLLBACK_UNAVAILABLE')
+      const ops: PathOp[] = plan.ops.map(item => {
+        const field = item.path[item.path.length - 1]
+        return Object.hasOwn(before.user, field)
+          ? { op: 'set', path: [...item.path], value: before.user[field] }
+          : { op: 'unset', path: [...item.path] }
+      })
+      const outcome = await write(operationId, fresh, ops, { values: before.values, user: before.user }, op)
+      // A refused/conflicted attempt must not consume the single rollback slot:
+      // the caller may retry with the actual current revision.
+      if (outcome.status === 200) original.rolledBack = true
+      return outcome
+    })
+    operations.set(operationId, op)
+    return op.result
+  }
+  async function handle(req: Parameters<typeof rejectAdmin>[0], res: Parameters<typeof rejectAdmin>[1], work: () => Promise<void>) {
+    try {
+      if (await rejectAdmin(req, res, store, guard)) return
+      prune()
+      await work()
+    } catch (error: unknown) {
+      sendJson(res, error instanceof Refusal ? error.status : 503, {
+        ok: false, code: error instanceof Refusal ? error.code : 'NATIVE_CONFIG_UNAVAILABLE',
+        error: 'Native model configuration request was refused',
+      })
+    }
+  }
+  router.get('/model-config/native/inspect', (req, res, _params, query) => handle(req, res, async () => {
+    exact(query, ['runtime', 'target', 'provider'])
+    bodyRuntime(query.runtime)
+    const target = targetOf(query.target === 'default' ? { kind: 'default' }
+      : query.target === 'provider' ? { kind: 'provider', provider: query.provider } : null)
+    if (target.kind === 'default' && query.provider !== undefined) return bad()
+    sendJson(res, 200, { ok: true, data: view(await read(target)) })
+  }), { auth: 'admin' })
+  for (const action of ['preview', 'apply', 'rollback']) {
+    router.post(`/model-config/${action}`, (req, res) => handle(req, res, async () => {
+      let body: unknown
+      try { body = await readJsonBody(req, 64 * 1024) } catch { return bad() }
+      if (!plain(body)) return bad()
+      if (action === 'apply') { respond(res, await runApply(body)); return }
+      if (action === 'rollback') { respond(res, await runRollback(body)); return }
+      exact(body, ['runtime', 'target', 'expectedRevision', 'requestId', 'patch'])
+      bodyRuntime(body.runtime)
+      const target = targetOf(body.target)
+      const expected = fenceOf(body.expectedRevision)
+      const request = requestId(body.requestId)
+      const current = await read(target)
+      checkFence(current.fence, expected)
+      const after = patched(current, body.patch)
+      if (target.kind === 'default') await validateDefault(after.values)
+      const binding = hash([target, expected, after.ops])
+      const previous = requests.get(request)
+      if (previous) {
+        if (previous.binding !== binding) throw new Refusal(409, 'IDEMPOTENCY_CONFLICT')
+        sendJson(res, 200, { ok: true, data: previewView(previous) })
+        return
+      }
+      if (plans.size >= LIMIT) throw new Refusal(503, 'CAPACITY_EXCEEDED')
+      const plan: Plan = { id: randomUUID(), binding, requestId: request, expiresAt: Date.now() + PLAN_TTL,
+        before: current, after: { values: after.values, user: after.user }, ops: after.ops, used: false }
+      plans.set(plan.id, plan)
+      requests.set(request, plan)
+      sendJson(res, 200, { ok: true, data: previewView(plan) })
+    }), { auth: 'admin', deferBody: true })
+  }
+}

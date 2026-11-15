@@ -140,6 +140,30 @@ SID=$(curl -s -X POST $BASE/sessions \
 
 `PUT /models/default` 与设置命名空间 `agent-default-model` 写同一存储，两者互通。
 
+### 3.1 管理员安全 inspect（P0）
+
+需要查看节点模型管理能力时，优先 `GET $BASE/model-config/inspect?runtime=dsh`。
+
+1. 先确认调用方已有**独立 Admin Token**，用 `X-Admin-Token` 或 Bearer 发送；普通节点 API Key
+   不能替代。没有管理凭证则报告缺失，不尝试提权、读取真实 token 文件或用 legacy 写接口兜底。
+2. 默认仅回环，浏览器需同源；远端需显式 adminRemoteAccess 且网络已收口。数据面鉴权关闭仍需管理凭证。
+3. 只消费 `data.nodeDefault {provider,model,reasoningEffort?}`、`models[] {provider,id,name,isDefault,routeOnly?}`、
+   capabilities 与 activation。响应不含 raw settings/schema/headers/credentials/provider 对象或上游错误正文。
+4. P0 仅 inspect=true；preview/apply/rollback/providers/secrets/routing=false，conditionalWrite=none。
+   不读凭据 configured 元数据，不支持任何管理写入。`instanceId` 是重启/重载即变化的 incarnation，
+   不是持久节点身份；不返回 revision，不是原子快照/durable CAS。activation=future-sessions，不迁移活跃会话。
+5. `501 NOT_SUPPORTED` 表示其他 runtime/旧宿主/不兼容结构；`503 MODEL_CATALOG_UNAVAILABLE`
+   表示目录有失败，不能渲染成空目录成功；其他异常为固定 `503 MODEL_CONFIG_UNAVAILABLE`。
+   `401 ADMIN_UNAUTHORIZED`、`403 FORBIDDEN_ORIGIN/FORBIDDEN_REMOTE`、`429 RATE_LIMITED` 应停止并修复权限/网络条件，不能循环试探。
+
+```bash
+curl -s "$BASE/model-config/inspect?runtime=dsh" -H "X-Admin-Token: $ADMIN_TOKEN"
+```
+
+`routeOnly` 仅路由占位，不是已验证的 upstream model 或 Codex 路由能力。
+既有 `PUT /models/default` / `PATCH /settings/:namespace` 不具备新管理桥的权限、revision 或回滚保证；
+不得用它们绕过管理桥的 NOT_SUPPORTED/条件冲突。
+
 ## 4. 流式与同步对话
 
 | 方法 | 路径 | 说明 |

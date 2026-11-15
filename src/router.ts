@@ -37,12 +37,16 @@ export interface RouteEntry {
   handler: RouteHandler
   /** true = 跳过 JSON 解析，把原始请求体 Buffer 交给 handler（文件上传用） */
   rawBody?: boolean
+  /** Leave body parsing to an authenticated handler (bounded admin-only JSON). */
+  deferBody?: boolean
   /** 鉴权模式，默认 data */
   auth?: RouteAuthMode
 }
 
 export interface RouteOptions {
   rawBody?: boolean
+  /** Handler must authenticate before reading a bounded request body. */
+  deferBody?: boolean
   auth?: RouteAuthMode
 }
 
@@ -81,6 +85,7 @@ export class HttpRouter {
       paramNames,
       handler,
       rawBody: options?.rawBody,
+      deferBody: options?.deferBody,
       auth: options?.auth,
     })
   }
@@ -205,7 +210,7 @@ export class HttpRouter {
 
     // 读取并解析 Body（针对 POST/PUT/PATCH）
     let body: any = null
-    if (['POST', 'PUT', 'PATCH'].includes(reqMethod)) {
+    if (['POST', 'PUT', 'PATCH'].includes(reqMethod) && !matchedRoute.deferBody) {
       if (matchedRoute.rawBody) {
         // 文件上传等原始体路由：整包读入 Buffer（上限取 maxUploadBytes 配置）
         try {

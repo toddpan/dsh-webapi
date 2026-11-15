@@ -128,7 +128,7 @@ function validateInput(body: any): string | null {
 }
 
 /** 返回 true 表示请求已被本函数终结（未通过管理面鉴权） */
-async function rejectAdmin(
+export async function rejectAdmin(
   req: IncomingMessage,
   res: ServerResponse,
   store: ApiKeyStore,
