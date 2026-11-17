@@ -234,6 +234,30 @@ test('status remains readable during a blocked download and unknown totals stay 
   assert.equal((await start).installProgress.phase, 'done')
 })
 
+test('interrupted release download resumes on a mirror and verifies the complete payload', async t => {
+  const dir = await temp(t); const transport = downloads(); let interrupted = false; let resumed = false
+  const installed = await installOnenatClient({ dir, platform: 'linux', arch: 'x64', fetch: async (input, init) => {
+    const url = String(input)
+    if (!url.endsWith('/' + asset)) return transport.fetch(input)
+    if (url.startsWith('https://github.com/') && !interrupted) {
+      interrupted = true
+      let sent = false
+      return new Response(new ReadableStream({ pull(controller) {
+        if (!sent) { sent = true; controller.enqueue(bytes.subarray(0, 8)) }
+        else controller.error(new Error('connection reset'))
+      } }), { headers: { 'content-length': String(bytes.length) } })
+    }
+    assert.ok(url.startsWith('https://ghfast.top/'))
+    assert.equal(init.headers.Range, 'bytes=8-')
+    resumed = true
+    return new Response(bytes.subarray(8), { status: 206, headers: {
+      'content-range': `bytes 8-${bytes.length - 1}/${bytes.length}`, 'content-length': String(bytes.length - 8),
+    } })
+  } })
+  assert.equal(resumed, true)
+  assert.deepEqual(await readFile(installed.binary), bytes)
+})
+
 test('log tail keeps recent sanitized lines for the settings UI', async t => {
   const dir = await temp(t); const launches = []
   const tunnel = manager(dir, downloads(), launches); t.after(() => tunnel.close())

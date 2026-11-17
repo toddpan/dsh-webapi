@@ -69,6 +69,10 @@ export declare class NodeOnboarding {
         updateAvailable: boolean;
     }>;
     upgradeOnenat(force: boolean): Promise<unknown>;
+    /** 手动下载/安装 ONENAT 客户端：不要求已配置隧道（Windows 预装/排障用），进度经 tunnel.installProgress 透出。 */
+    installOnenatClient(options?: {
+        force?: boolean;
+    }): Promise<unknown>;
     onenatLogs(): Promise<{
         lines: string[];
     }>;

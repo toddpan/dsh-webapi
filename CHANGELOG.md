@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.6 — 2026-11-17
+
+Reliable ONENAT downloads, Windows transport support and simpler connection controls.
+
+- Add standalone client installation with a single shared download progress panel. Support mirror fallback, HTTP Range resume, response-range/length validation, connection and stall timeouts, and checksum verification before atomic installation.
+- Windows can provision, start and restore the HTTPS tunnel without attempting unsupported security-node pairing. The isolated-node platform gate remains intact.
+- Show saved-account reconnect controls before node binding; reuse encrypted credentials without asking for the password again. Temporary server failures no longer erase saved passwords.
+- Simplify actions by connection state, hide completed progress, move reinstall/logs and account changes into disclosures, and disable conflicting operations while installing/connecting.
+- Retain all 0.7.2–0.7.5 root-host, workspace replay and node-name fixes.
+
 ## 0.7.5 — 2026-11-17
 
 Keep the login-chosen node name across rebinds.

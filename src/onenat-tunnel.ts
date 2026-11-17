@@ -2,8 +2,21 @@ import { createHash, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
+import type { ReadableStreamReadResult } from 'node:stream/web'
 
 const RELEASE_REPO = 'toddpan/onenat'
+/** GitHub 直连被墙/限速时的加速镜像；仅替换下载主机，SHA256 校验兜底保证内容与官方一致。 */
+const RELEASE_SOURCE_WRAPS: ((path: string) => string)[] = [
+  path => path,
+  path => 'https://ghfast.top/' + path,
+  path => 'https://gh-proxy.com/' + path,
+]
+/** 首源（直连 GitHub）的单次尝试预算：直连被限速时尽快换源，已下载字节经断点续传跨源累积。 */
+const DIRECT_ATTEMPT_BUDGET_MS = 45_000
+/** 连接/响应头阶段限时；头到达后解除，正文交给停滞守卫，避免慢链路被总超时腰斩。 */
+const CONNECT_TIMEOUT_MS = 20_000
+/** 正文 30 秒无字节视为停滞，换下一个源/尝试。 */
+const STALL_TIMEOUT_MS = 30_000
 const MAX_ASSET_BYTES = 100 * 1024 * 1024
 export type OnenatProtocol = 'https' | 'tcp'
 export interface OnenatTunnelSettings {
@@ -109,18 +122,25 @@ export function compareVersionTags(a: string, b: string): number {
   return 0
 }
 
-/** GitHub API 优先，限流时退回 releases/latest 的 HTML 重定向。 */
+/** GitHub API 优先，限流/直连失败时退回 releases/latest 的 HTML 重定向（含加速镜像源）。 */
 async function latestReleaseTag(fetcher: typeof globalThis.fetch): Promise<string> {
   try {
     const response = await fetcher('https://api.github.com/repos/' + RELEASE_REPO + '/releases/latest', { signal: AbortSignal.timeout(20_000), headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'dsh-web-service-onenat' } })
     if (response.ok) return String((await response.json() as { tag_name?: string }).tag_name ?? '')
   } catch { /* GitHub's HTML redirect remains usable when the API is rate limited. */ }
-  const response = await fetcher('https://github.com/' + RELEASE_REPO + '/releases/latest', { signal: AbortSignal.timeout(20_000) })
-  if (!response.ok) throw new Error('无法查询 ONENAT GitHub Release：HTTP ' + response.status)
-  const match = /^https:\/\/github\.com\/toddpan\/onenat\/releases\/tag\/([^/?#]+)$/.exec(response.url)
-  await response.body?.cancel()
-  if (!match) throw new Error('ONENAT GitHub latest 未返回有效的 release tag')
-  return decodeURIComponent(match[1])
+  let last: unknown
+  for (const wrap of RELEASE_SOURCE_WRAPS) {
+    try {
+      const response = await fetchWithConnectTimeout(fetcher, wrap('https://github.com/' + RELEASE_REPO + '/releases/latest'), {})
+      if (!response.ok) throw new Error('HTTP ' + response.status)
+      // 镜像源的最终 URL 可能是 github.com 原形，也可能带镜像前缀，宽松匹配 tag 段即可。
+      const match = /github\.com\/toddpan\/onenat\/releases\/tag\/([^/?#]+)/.exec(response.url)
+      await response.body?.cancel()
+      if (match) return decodeURIComponent(match[1])
+      throw new Error('ONENAT GitHub latest 未返回有效的 release tag')
+    } catch (error) { last = error }
+  }
+  throw last instanceof Error ? last : new Error('无法查询 ONENAT GitHub Release')
 }
 function checksumFor(text: string, asset: string): string {
   for (const line of text.split(/\r?\n/)) {
@@ -128,27 +148,6 @@ function checksumFor(text: string, asset: string): string {
     if (m && m[2].replace(/^\.\//, '') === asset) return m[1].toLowerCase()
   }
   throw new Error('ONENAT checksums.txt 未包含 ' + asset)
-}
-async function bodyBytes(response: Response, max: number, onProgress?: (done: number, total?: number) => void): Promise<Buffer> {
-  if (!response.ok) throw new Error('下载 ONENAT 失败：HTTP ' + response.status)
-  const declared = Number(response.headers.get('content-length') || 0)
-  if (declared > max) throw new Error('ONENAT 下载文件超过大小限制')
-  if (!response.body) throw new Error('ONENAT 下载响应为空')
-  const reader = response.body.getReader()
-  let length = 0
-  const chunks: Buffer[] = []
-  onProgress?.(0, declared > 0 ? declared : undefined)
-  try {
-    for (;;) {
-      const { value, done } = await reader.read()
-      if (done) break
-      length += value.byteLength
-      if (length > max) throw new Error('ONENAT 下载文件超过大小限制')
-      chunks.push(Buffer.from(value))
-      onProgress?.(length, declared > 0 ? declared : undefined)
-    }
-  } finally { await reader.cancel().catch(() => {}) }
-  return Buffer.concat(chunks)
 }
 async function privateWrite(file: string, content: string | Buffer, mode = 0o600): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -160,18 +159,80 @@ async function privateWrite(file: string, content: string | Buffer, mode = 0o600
   } finally { await fs.unlink(temporary).catch(() => {}) }
 }
 
-async function downloadBytes(fetcher: typeof globalThis.fetch, url: string, timeoutMs: number, maxBytes: number, onProgress?: (done: number, total: number | undefined, attempt: number) => void): Promise<Buffer> {
+/** 连接/响应头阶段限时；头到达后解除中止信号，正文由停滞守卫接管。 */
+function fetchWithConnectTimeout(fetcher: typeof globalThis.fetch, url: string, init: { headers?: Record<string, string> }): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS)
+  return fetcher(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer))
+}
+
+/** 单次读：30 秒无字节视为停滞并取消流。 */
+async function readChunk(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let stallTimer: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        stallTimer = setTimeout(() => { reject(new Error('下载停滞超过 ' + Math.round(STALL_TIMEOUT_MS / 1000) + ' 秒')); void reader.cancel().catch(() => {}) }, STALL_TIMEOUT_MS)
+      }),
+    ])
+  } finally { clearTimeout(stallTimer) }
+}
+
+/** 多源断点续传下载：字节跨尝试累积，206 续传、源不支持 Range 时回退全量，SHA256 由调用方校验。 */
+async function downloadBytes(fetcher: typeof globalThis.fetch, sources: string[], maxBytes: number, onProgress?: (done: number, total: number | undefined, attempt: number) => void): Promise<Buffer> {
+  const maxAttempts = sources.length * 2
+  let chunks: Buffer[] = []
+  let received = 0
+  let total: number | undefined
   let last: unknown
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const sourceIndex = (attempt - 1) % sources.length
+    // 直连预算按整次尝试计时：涓流限速（每秒都有字节、永不触发停滞守卫）也能在预算内换源。
+    const deadlineAt = new URL(sources[sourceIndex]).hostname === 'github.com' ? Date.now() + DIRECT_ATTEMPT_BUDGET_MS : undefined
     try {
-      onProgress?.(0, undefined, attempt + 1)
-      return await bodyBytes(await fetcher(url, { signal: AbortSignal.timeout(timeoutMs) }), maxBytes, (done, total) => onProgress?.(done, total, attempt + 1))
+      onProgress?.(received, total, attempt)
+      const resumed = received > 0
+      const response = await fetchWithConnectTimeout(fetcher, sources[sourceIndex], resumed ? { headers: { Range: 'bytes=' + received + '-' } } : {})
+      if (!response.ok) throw new Error('下载 ONENAT 失败：HTTP ' + response.status)
+      if (response.status !== 206 && resumed) { chunks = []; received = 0 }
+      if (response.status === 206) {
+        const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') || '')
+        if (!range || Number(range[1]) !== received || Number(range[2]) < received || Number(range[2]) >= Number(range[3])) {
+          await response.body?.cancel()
+          throw new Error('ONENAT 断点续传响应范围无效')
+        }
+        total = Number(range[3])
+      } else {
+        const declared = Number(response.headers.get('content-length') || 0)
+        total = declared > 0 ? declared : undefined
+      }
+      if ((total ?? 0) > maxBytes) throw new Error('ONENAT 下载文件超过大小限制')
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('ONENAT 下载响应为空')
+      let clearBudget: (() => void) | undefined
+      const budget = deadlineAt ? new Promise<never>((_, reject) => {
+        const timer = setTimeout(() => { reject(new Error('直连下载过慢，换源重试')); void reader.cancel().catch(() => {}) }, Math.max(1_000, deadlineAt - Date.now()))
+        clearBudget = () => clearTimeout(timer)
+      }) : undefined
+      try {
+        for (;;) {
+          const { value, done } = await Promise.race([readChunk(reader), ...(budget ? [budget] : [])])
+          if (done) break
+          chunks.push(Buffer.from(value))
+          received += value.byteLength
+          if (received > maxBytes) { await reader.cancel().catch(() => {}); throw new Error('ONENAT 下载文件超过大小限制') }
+          onProgress?.(received, total, attempt)
+        }
+      } finally { clearBudget?.(); void reader.cancel().catch(() => {}) }
+      if (total !== undefined && received !== total) throw new Error('ONENAT 下载响应提前结束，继续断点续传')
+      return Buffer.concat(chunks)
     } catch (error) {
       last = error
-      await new Promise(resolve => setTimeout(resolve, 1_000 * (attempt + 1)))
+      if (attempt < maxAttempts) await new Promise(resolve => setTimeout(resolve, Math.min(8_000, 1_000 * 2 ** (attempt - 1))))
     }
   }
-  throw last
+  throw new Error('ONENAT 下载失败（已尝试直连与镜像源共 ' + maxAttempts + ' 次）： ' + errorText(last))
 }
 export async function installOnenatClient(options: Pick<OnenatTunnelOptions, 'dir' | 'fetch' | 'platform' | 'arch'> & { refresh?: boolean; onProgress?: (progress: OnenatInstallProgress) => void }): Promise<{ binary: string; releaseTag: string }> {
   const startedAt = Date.now()
@@ -196,16 +257,26 @@ export async function installOnenatClient(options: Pick<OnenatTunnelOptions, 'di
   if (!/^[a-zA-Z0-9._-]+$/.test(releaseTag)) throw new Error('ONENAT GitHub release tag 无效')
   const base = 'https://github.com/' + RELEASE_REPO + '/releases/download/' + encodeURIComponent(releaseTag) + '/'
   report('checksums', '正在获取 SHA256 校验清单')
-  const sums = await downloadBytes(fetcher, base + 'checksums.txt', 30_000, 2 * 1024 * 1024)
+  const sums = await downloadBytes(fetcher, RELEASE_SOURCE_WRAPS.map(wrap => wrap(base + 'checksums.txt')), 2 * 1024 * 1024)
   const expected = checksumFor(sums.toString('utf8'), asset)
-  const bytes = await downloadBytes(fetcher, base + asset, 90_000, MAX_ASSET_BYTES, (bytesDone, bytesTotal, attempt) => {
-    report('downloading', attempt > 1 ? `下载重试中（第 ${attempt}/3 次）` : '正在下载 ONENAT 客户端，首次下载可能需要几分钟', {
-      bytesDone, bytesTotal, attempt,
-      percent: bytesTotal ? Math.min(100, Math.floor(bytesDone / bytesTotal * 100)) : undefined,
-    })
-  })
-  report('verifying', '下载完成，正在校验 SHA256')
-  if (createHash('sha256').update(bytes).digest('hex') !== expected) throw new Error('ONENAT 客户端 SHA256 校验失败，未安装')
+  // 直连可能返回被中间链路损坏的「完整」数据：单源下载成功但校验失败时按源重拉，直到校验通过或源耗尽。
+  let bytes: Buffer | undefined
+  let lastError: unknown
+  for (let sourceOffset = 0; sourceOffset < RELEASE_SOURCE_WRAPS.length; sourceOffset++) {
+    try {
+      const candidate = await downloadBytes(fetcher, RELEASE_SOURCE_WRAPS.slice(sourceOffset).map(wrap => wrap(base + asset)), MAX_ASSET_BYTES, (bytesDone, bytesTotal, attempt) => {
+        report('downloading', attempt > 1 ? `下载重试中（第 ${attempt} 次尝试，自动换源/断点续传）` : '正在下载 ONENAT 客户端，首次下载可能需要几分钟', {
+          bytesDone, bytesTotal, attempt,
+          percent: bytesTotal ? Math.min(100, Math.floor(bytesDone / bytesTotal * 100)) : undefined,
+        })
+      })
+      report('verifying', '下载完成，正在校验 SHA256')
+      if (createHash('sha256').update(candidate).digest('hex') !== expected) throw new Error('ONENAT 客户端 SHA256 校验失败（该源数据损坏），换源重试')
+      bytes = candidate
+      break
+    } catch (error) { lastError = error }
+  }
+  if (!bytes) throw lastError instanceof Error ? lastError : new Error('ONENAT 客户端下载失败')
   report('installing', '校验通过，正在安装客户端')
   await privateWrite(binary, bytes, 0o700)
   await privateWrite(manifestFile, JSON.stringify({ asset, releaseTag, sha256: expected }))
@@ -359,6 +430,29 @@ export class OnenatTunnel {
       } catch (error) {
         this.fail(error)
         if (wasRunning) this.launch()
+        throw error
+      }
+      return this.view()
+    })
+  }
+  /** 手动下载/安装客户端：不依赖 WorkBuddy 受管配置（Windows 预装与排障用），仅下载校验、不启动进程。 */
+  installClient(options: { force?: boolean } = {}): Promise<OnenatTunnelState & { noop?: boolean; message?: string }> {
+    return this.enqueue(async () => {
+      if (this.closed) throw new Error('ONENAT 管理器已关闭')
+      if (this.binary && !options.force) {
+        return { ...this.view(), noop: true, message: '客户端已安装 ' + (this.releaseTag || '') }
+      }
+      this.stopped = true
+      await this.terminate()
+      this.phase = 'installing'
+      try {
+        const installed = await installOnenatClient({ ...this.opts, fetch: this.fetcher, refresh: options.force === true, onProgress: progress => { this.installProgress = progress } })
+        this.binary = installed.binary
+        this.releaseTag = installed.releaseTag
+        this.retries = 0
+        this.phase = 'stopped'
+      } catch (error) {
+        this.fail(error)
         throw error
       }
       return this.view()

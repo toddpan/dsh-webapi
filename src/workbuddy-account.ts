@@ -97,7 +97,7 @@ export class WorkBuddyAccount {
       } catch (err: any) {
         const message = err.message || ''
         // 密文失效或记住的密码已被用户改掉：留着只会每次 401 都重试，直接清除
-        if (!/超时|abort|fetch failed|ENOTFOUND|ECONNREFUSED/i.test(message)) {
+        if (err.status === 401 || /已记住的密码无法解密/.test(message)) {
           delete record.passwordSealed
           await this.save().catch(() => {})
         }

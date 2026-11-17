@@ -136,6 +136,13 @@ export declare class OnenatTunnel {
         noop?: boolean;
         message?: string;
     }>;
+    /** 手动下载/安装客户端：不依赖 WorkBuddy 受管配置（Windows 预装与排障用），仅下载校验、不启动进程。 */
+    installClient(options?: {
+        force?: boolean;
+    }): Promise<OnenatTunnelState & {
+        noop?: boolean;
+        message?: string;
+    }>;
     private launch;
     /** The normal WorkBuddy flow: its backend provisions ONENAT; no ONENAT login reaches this plugin. */
     startManaged(input: OnenatManagedInput): Promise<OnenatTunnelState>;
