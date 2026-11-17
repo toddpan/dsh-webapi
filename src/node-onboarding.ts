@@ -64,6 +64,9 @@ export class NodeOnboarding {
   constructor(private readonly ctx: Context, private readonly config: WebServiceConfig,
     private readonly keys: ApiKeyStore, private readonly options: NodeOnboardingOptions,
     dependencies: NodeOnboardingDependencies = {}) {
+    if (config.nodeAllowRoot === true) {
+      console.log('[dsh-web-service] nodeAllowRoot=true：安全节点允许在 root 下运行（uid 归属隔离防线已弱化，仅保留路径范围防线）')
+    }
     this.dir = path.join(keys.dir, 'node-connection')
     this.account = dependencies.account ?? new WorkBuddyAccount(this.dir,
       { seal: plaintext => keys.sealCredential(plaintext), open: sealed => keys.openCredential(sealed) })

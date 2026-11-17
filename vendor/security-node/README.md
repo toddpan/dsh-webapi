@@ -41,3 +41,5 @@ node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit
 Tests compile an independent installed-package fixture and exercise real HTTP/Python. Optional WORKBUDDY_SOURCE compiles the original client for interoperability; it is not required at runtime. Native macOS tested, plus simulated Windows/root/missing-Python preflight; Linux isolation and native Windows not exercised.
 
 Plugin-side change (2026-11-17, dsh-web-service): `catalog/resolve` in `security-node-service.mjs` falls back to registering a resolved workspace without directory entries when the broker refuses strict enumeration (`UNSAFE_FILE`/`UNTRUSTED_FILE`/`FILE_TOO_LARGE`/`DIRECTORY_TOO_LARGE`), so workspace registration is not blocked by directory content (symlinks in real dev directories). Actual file listings keep the strict checks; `security-node-fs.py` and `source/node-security.ts` are unchanged.
+
+Plugin-side change (2026-11-17, continued): `startSecurityNode` accepts `config.allowRoot === true` to run under root for hosts that themselves run as root (single-user machines); the Linux `isolationProbe` keeps degrading to file-only mode under root as before.

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.3 — 2026-11-17
+
+Honor `nodeAllowRoot` through to the security node process itself — 0.7.2 gated the plugin-side preflight but the vendored `startSecurityNode` still rejected root, so root-host deployments could not start the node at all.
+
+- `SecurityNodeConfig` gains `allowRoot`; `startSecurityNode` skips the root rejection only when the host opted in (`config.allowRoot === true`). The Linux isolation probe keeps degrading to file-only mode under root as before.
+- `NodeRuntime` passes its `allowRoot` option into the spawned security node config.
+- Vendor README documents both plugin-side deviations from the pinned source.
+
+Validation: TypeScript typecheck and build; the full node onboarding E2E suite, node runtime and oneNat tunnel unit suites remain green; live root-host deployment verified.
+
 ## 0.7.2 — 2026-11-17
 
 Allow the WorkBuddy node security node to run under root via an explicit opt-in, for DSH hosts that themselves run as root.

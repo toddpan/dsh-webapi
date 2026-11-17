@@ -197,7 +197,10 @@ async function isolationProbe(config) {
 
 export async function startSecurityNode(config, protocol) {
   const P = protocol
-  requireThat(['linux', 'darwin'].includes(process.platform) && process.getuid?.() !== 0, 'UNPRIVILEGED_UNIX_REQUIRED')
+  // 宿主显式开启 allowRoot 时放行 root：uid 归属校验失去隔离意义，路径范围防线
+  // （pinned 目录 + O_NOFOLLOW + 祖先目录校验）保留；仅限 DSH 宿主本身即 root 的单用户机器。
+  requireThat(['linux', 'darwin'].includes(process.platform)
+    && (process.getuid?.() !== 0 || config.allowRoot === true), 'UNPRIVILEGED_UNIX_REQUIRED')
   requireThat(identifier(config.nodeId) && config.issuerKeys && typeof config.issuerKeys === 'object', 'INVALID_NODE_CONFIG')
   requireThat(['127.0.0.1', '::1'].includes(config.host ?? '127.0.0.1'), 'LOOPBACK_BIND_REQUIRED')
   requireThat(Number.isSafeInteger(config.port) && config.port >= 0 && config.port <= 65535, 'INVALID_PORT')
