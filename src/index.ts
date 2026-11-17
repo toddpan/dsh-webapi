@@ -28,6 +28,7 @@ import { registerCollaborationRoutes } from './collaboration.js'
 import { registerOpenApiRoutes } from './openapi.js'
 import { ApiKeyStore } from './api-keys-store.js'
 import { registerApiKeyRoutes } from './api-keys.js'
+import { NodeOnboarding, registerNodeOnboardingRoutes } from './node-onboarding.js'
 import { ServiceSettingsStore } from './service-settings.js'
 import type { BindIp, ServiceSettingsPatch, ServiceState } from './service-settings.js'
 import {
@@ -82,6 +83,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   let standaloneError = ''
   /** 已关闭监听器的收尾队列（存量 keep-alive 连接结束才算真正释放） */
   let closing: Promise<void> = Promise.resolve()
+
+  const nodeOnboarding = new NodeOnboarding(ctx, config, keyStore, {
+    getLocalPort: () => standaloneListeningPort,
+    getMainPort: () => (ctx.get('webServer') as any)?.port || 0,
+    startService: () => startService({}),
+  })
+  registerNodeOnboardingRoutes(router, config, keyStore, nodeOnboarding)
+  ctx.effect(() => () => { void nodeOnboarding.close() }, 'dsh-web-service: node connection')
 
   // 1. 系统状态接口
   router.get('/system/status', async (_req: IncomingMessage, res: ServerResponse) => {
@@ -173,6 +182,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // 状态；首次安装自动分配一个空闲端口（从 31800 起），此后端口固定不变，用户可随时
   // 停止 / 启动。状态持久化在 service-settings.json，保存即时生效、无需重启 DSH。
   const standaloneHandler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    if (nodeOnboarding.handle(req, res)) return
     const handled = await router.dispatch(req, res, prefix)
     if (!handled && !res.headersSent) {
       sendJson(res, 404, {
@@ -441,6 +451,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
   }
   ctx.effect(() => () => { void closeCurrentServer() }, 'dsh-web-service: standalone api server')
+  void nodeOnboarding.restore()
 
   // 4.1 API Key 管理页 + 管理端点（含「API 服务」启停管理）
   registerApiKeyRoutes(router, config, keyStore, {

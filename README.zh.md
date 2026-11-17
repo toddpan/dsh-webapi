@@ -3,6 +3,8 @@
 [English](README.md) | **中文**
 
 > 第一次用？先看图文版 [使用教程](docs/TUTORIAL.zh.md)。
+>
+> 想把这台 DSH 一键接入 WorkBuddy 多智能体工作台？见 [登录 WorkBuddy 即绑定 DSH 节点](docs/node-onboarding.zh.md)。
 
 把 DeepSeek Harness 通过 HTTP 开放出来：DSH 里的工作区、会话、模型、设置、技能与文件直接变成
 REST 接口与 SSE 流，再加一个 OpenAI 兼容的 `/chat/completions`，现成的 OpenAI 客户端不用改就能接到 DSH。

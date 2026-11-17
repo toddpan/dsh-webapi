@@ -11,6 +11,7 @@
  *   通过管理令牌鉴权的 /api-keys/:id/reveal 现取现用，明文只进剪贴板、不落 DOM。
  */
 
+import { NODE_CONNECTION_HTML, NODE_CONNECTION_SCRIPT } from './node-connection-page.js'
 import { pluginVersion } from './version.js'
 import { HARNESS_TOKENS_CSS, HARNESS_PRIMITIVES_CSS, HARNESS_THEME_SYNC_JS, EMBED_NAV_JS } from './page-theme.js'
 
@@ -207,6 +208,8 @@ export function generateApiKeysHtml(options: ApiKeysPageOptions): string {
     </header>
 
     <div id="bannerSlot"></div>
+
+    ${NODE_CONNECTION_HTML}
 
     <!-- 管理令牌闸门 -->
     <section id="gateCard" class="card" style="display:none;">
@@ -676,9 +679,11 @@ export function generateApiKeysHtml(options: ApiKeysPageOptions): string {
       renderKeys();
       renderCurl();
       loadService();
+      loadNodeConnection();
     }
 
     function logoutToken() {
+      clearNodeTicket();
       TOKEN = '';
       AUTHED = false;
       localStorage.removeItem(TOKEN_KEY);
@@ -1602,6 +1607,8 @@ export function generateApiKeysHtml(options: ApiKeysPageOptions): string {
         .then(function () { toast('已复制 curl 示例'); })
         .catch(function () { toast('复制失败，请手动选中复制'); });
     }
+
+    ${NODE_CONNECTION_SCRIPT}
 
     fillBaseUrl();
     boot();

@@ -464,6 +464,18 @@ export class ApiKeyStore {
     return this.sealKey
   }
 
+  /** 给节点连接等本机凭据加密落盘用；管理令牌未就绪返回 null，调用方降级为不保存 */
+  sealCredential(plaintext: string): string | null {
+    const key = this.sealKeyOrNull()
+    return key ? sealPlaintext(key, plaintext) : null
+  }
+
+  /** 与 sealCredential 配对；密文无效或管理令牌被重建返回 null */
+  openCredential(sealed: string): string | null {
+    const key = this.sealKeyOrNull()
+    return key ? unsealPlaintext(key, sealed) : null
+  }
+
   /**
    * 复制：返回某条记录的明文。
    * - `{ plaintext }`：可复制；

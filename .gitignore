@@ -14,3 +14,10 @@ onenat-skill.md
 # pnpm 本地依赖链接产物（构建临时生成，不入库）
 .pnpm-store/
 pnpm-lock.yaml
+
+# 测试残留工作目录（不入库）
+.bridge-test-*
+.model-config-native-test-*
+
+# 本机联调脚本：内含真实 WorkBuddy 账号凭据，禁止入库
+scripts/live-onboarding-test.mjs
