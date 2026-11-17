@@ -8,6 +8,9 @@ import { isIP } from 'node:net'
 import { hostname } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
+// @ts-ignore vendored Windows adapter is native ESM
+import { windowsPath, protectWindowsDirectory, windowsPython } from '../vendor/security-node/windows-paths.mjs'
+const windows = process.platform === 'win32'
 import type { ApiKeyStore } from './api-keys-store.js'
 import * as protocol from '../vendor/security-node/node-security.js'
 import { startSecurityNode, type SecurityNode, type SecurityNodeConfig } from '../vendor/security-node/security-node-service.mjs'
@@ -53,7 +56,7 @@ const execFileAsync = promisify(execFile)
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
 const within = (root: string, target: string) => {
   const rel = path.relative(root, target)
-  return !rel || rel !== '..' && !rel.startsWith('../') && !path.isAbsolute(rel)
+  return !rel || rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel)
 }
 const overlaps = (a: string, b: string) => within(a, b) || within(b, a)
 const sameRoots = (a: string[], b: string[]) => a.length === b.length && a.every((root, i) => root === b[i])
@@ -61,7 +64,7 @@ const sameRoots = (a: string[], b: string[]) => a.length === b.length && a.every
 const errorMessages: Record<string, string> = {
   NODE_PLATFORM_UNSUPPORTED: '安全节点仅支持 macOS/Linux；Windows 不提供路径隔离。',
   UNPRIVILEGED_UNIX_REQUIRED: '安全节点必须以非 root 的 Unix 用户运行。',
-  PYTHON_UNAVAILABLE: '安全节点需要可运行的 /usr/bin/python3（Python 3.8+）；文件隔离不可用。',
+  PYTHON_UNAVAILABLE: windows ? '未找到可运行的 DSH 内置 Python（3.8+），Windows 节点无法启动。' : '安全节点需要可运行的 /usr/bin/python3（Python 3.8+）；文件隔离不可用。',
   NO_WORKSPACE_ROOTS: '没有可导出的工作目录，请配置真实的工作区目录。',
   INVALID_WORKSPACE_ROOT: '工作区必须是规范的绝对目录路径。',
   SENSITIVE_ROOT_OVERLAP: '工作区不能覆盖节点身份、状态或 API Key 存储目录。',
@@ -94,6 +97,7 @@ function safeError(error: unknown): NodeRuntimeError {
 
 /** Keep the original runtime's private-ancestor and no-symlink contract. */
 async function privateDirectory(target: string, own = false): Promise<void> {
+  if (windows) return windowsPath(target, true)
   requireThat(path.isAbsolute(target) && path.normalize(target) === target && target !== '/', 'UNTRUSTED_CONFIG_PATH')
   let current = path.parse(target).root
   for (const part of target.slice(current.length).split(path.sep)) {
@@ -110,6 +114,12 @@ async function readPrivate(file: string): Promise<string | undefined> {
   try { st = await lstat(file) } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
     throw error
+  }
+  if (windows) {
+    await windowsPath(file, false)
+    requireThat(st.size <= 1_000_000, 'PRIVATE_CONFIG_REQUIRED')
+    const handle = await open(file, F.O_RDONLY)
+    try { return await handle.readFile('utf8') } finally { await handle.close() }
   }
   requireThat(st.isFile() && !st.isSymbolicLink() && st.nlink === 1 && st.uid === process.getuid!()
     && !(st.mode & 0o077) && st.size <= 1_000_000, 'PRIVATE_CONFIG_REQUIRED')
@@ -134,8 +144,10 @@ async function writePrivate(file: string, content: string, createOnly = false): 
     await handle.close()
     if (createOnly) await link(temporary, file)
     else { await rename(temporary, file); exists = false }
-    const directory = await open(path.dirname(file), F.O_RDONLY | F.O_DIRECTORY | F.O_NOFOLLOW)
-    try { await directory.sync() } finally { await directory.close() }
+    if (!windows) {
+      const directory = await open(path.dirname(file), F.O_RDONLY | F.O_DIRECTORY | F.O_NOFOLLOW)
+      try { await directory.sync() } finally { await directory.close() }
+    }
   } finally {
     await handle.close().catch(() => {})
     // temporary is an exclusive file in the already verified private parent.
@@ -181,6 +193,7 @@ export class NodeRuntime {
   }
 
   private async preflight(): Promise<void> {
+    if (windows) { await windowsPython(); this.preflightDone = true; return }
     requireThat(['darwin', 'linux'].includes(process.platform), 'NODE_PLATFORM_UNSUPPORTED')
     requireThat(typeof process.getuid === 'function' && (process.getuid() !== 0 || this.options.allowRoot === true), 'UNPRIVILEGED_UNIX_REQUIRED')
     if (this.preflightDone) return
@@ -196,6 +209,7 @@ export class NodeRuntime {
     if (this.metadata) return
     await mkdir(this.dir, { recursive: true, mode: 0o700 })
     await privateDirectory(this.dir, true)
+    if (windows) await protectWindowsDirectory(this.dir)
     await chmod(this.dir, 0o700)
     await mkdir(this.stateDir, { mode: 0o700, recursive: true })
     await privateDirectory(this.stateDir, true)
@@ -237,9 +251,9 @@ export class NodeRuntime {
     requireThat(Array.isArray(input), 'INVALID_WORKSPACE_ROOT')
     const candidates = new Set<string>()
     for (const value of input) {
-      requireThat(typeof value === 'string' && path.isAbsolute(value) && !/[\\\x00-\x1f\x7f]/.test(value), 'INVALID_WORKSPACE_ROOT')
+      requireThat(typeof value === 'string' && path.isAbsolute(value) && !(windows ? /[\x00-\x1f\x7f]/ : /[\\\x00-\x1f\x7f]/).test(value), 'INVALID_WORKSPACE_ROOT')
       const root = path.normalize(value)
-      if (root === '/') continue
+      if (root === path.parse(root).root) continue
       candidates.add(root)
     }
     // When the registry includes a parent and child, keep only the narrower roots.

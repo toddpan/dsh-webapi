@@ -74,7 +74,7 @@ export const NODE_CONNECTION_HTML = String.raw`<style>
 
   <div id="nodePanel-account" role="tabpanel" aria-labelledby="nodeTab-account">
     <p class="muted" id="nodeAccountIntro" style="margin:0 0 12px;">登录 WorkBuddy，自动建立外网连接并绑定 DSH 节点。</p>
-    <p class="node-note" id="nodePlatformNotice" hidden>Windows 支持 ONENAT 外网连接，暂不支持安全节点绑定和远程任务执行。</p>
+    <p class="node-note" id="nodePlatformNotice" hidden>Windows 节点支持配对、目录浏览和文件读取；文件修改与隔离命令执行暂不可用。</p>
     <form id="nodeAccountForm" onsubmit="loginWorkBuddy(event)">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;">
         <div class="field"><label class="field-label" for="nodeWorkBuddyUrl">WorkBuddy 地址</label><input id="nodeWorkBuddyUrl" type="url" autocomplete="url" required placeholder="https://你的 WorkBuddy 地址"></div>
@@ -224,7 +224,7 @@ export const NODE_CONNECTION_SCRIPT = String.raw`
       document.getElementById('nodeReconnectButton').hidden = !!t.running;
       document.getElementById('nodeReconnectButton').textContent = t.phase === 'error' ? '重试连接' : '连接';
       document.getElementById('nodeStopButton').hidden = !t.running;
-      document.getElementById('nodeGenerateButton').disabled = blocked || !t.running || t.phase !== 'online' || !!(data.node && data.node.platform === 'win32');
+      document.getElementById('nodeGenerateButton').disabled = blocked || !t.running || t.phase !== 'online';
       document.getElementById('nodeOnenatReinstall').disabled = blocked || !!t.running;
       document.getElementById('nodeOnenatReinstall').title = t.running ? '请先断开连接再重新安装' : '';
       document.getElementById('nodeCancelLogin').hidden = !a.configured || !NODE_SHOW_LOGIN_FORM;
@@ -369,13 +369,12 @@ export const NODE_CONNECTION_SCRIPT = String.raw`
         var dot = document.getElementById('nodeStatusDot');
         dot.className = 'node-dot ' + (NODE_PHASE_CLASS[t.phase] || 'is-stopped');
         var transportOnly = data.node && data.node.platform === 'win32';
-        document.getElementById('nodeLoginButton').textContent = transportOnly ? '登录并连接' : '登录并绑定节点';
-        document.getElementById('nodeAccountIntro').textContent = transportOnly ? '登录 WorkBuddy，自动建立本机的外网连接。' : '登录 WorkBuddy，自动建立外网连接并绑定 DSH 节点。';
+        document.getElementById('nodeLoginButton').textContent = '登录并绑定节点';
+        document.getElementById('nodeAccountIntro').textContent = '登录 WorkBuddy，自动建立外网连接并绑定 DSH 节点。';
         document.getElementById('nodePlatformNotice').hidden = !transportOnly;
-        document.getElementById('nodeManualPairing').hidden = transportOnly;
+        document.getElementById('nodeManualPairing').hidden = false;
         document.getElementById('nodeStatusText').textContent = t.phase === 'online' ? (a.nodeId ? '节点已在线' : '外网连接已就绪') : (NODE_PHASE_NAMES[t.phase] || t.phase);
-        document.getElementById('nodeGenerateButton').disabled = NODE_BUSY || transportOnly;
-        document.getElementById('nodeGenerateButton').title = transportOnly ? 'Windows 暂不支持安全节点绑定' : '';
+        document.getElementById('nodeGenerateButton').title = '';
         var errorText = data.error || t.error || '';
         if (errorText) document.getElementById('nodeStatusText').textContent += ' · ' + errorText;
         var versionTag = document.getElementById('nodeClientVersion');

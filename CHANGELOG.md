@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.7 — 2026-11-17
+
+Native Windows read-only security nodes and complete pairing attempts.
+
+- Start Windows security-node identity, signed pairing and workspace discovery instead of returning transport-only success. Support directory listing and file reading through a Windows handle broker; file mutation and isolated command execution remain disabled.
+- Discover bundled Python from standalone Node, desktop Electron and managed DSH runtime layouts. Protect private node storage with Windows ACLs.
+- Reject traversal, reparse points, hardlinks, alternate streams, replaced workspace identities, expired leases and drive-root exports. Keep macOS/Linux broker paths unchanged.
+- Enable Windows pairing controls and describe supported capabilities. Preserve binding errors across tunnel status refreshes.
+- Add native Windows and credential recovery regressions. WorkBuddy servers that reject Windows roots with INVALID_DIRECTORY must also apply the separately attached backend compatibility patch; this plugin release does not deploy the server change.
+
 ## 0.7.6 — 2026-11-17
 
 Reliable ONENAT downloads, Windows transport support and simpler connection controls.

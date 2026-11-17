@@ -1,0 +1,101 @@
+diff --git a/src/access-center.ts b/src/access-center.ts
+--- a/src/access-center.ts
++++ b/src/access-center.ts
+@@ -1,6 +1,6 @@
+ /** DOC-1: node creation rights and existing resource ACLs share one SQLite authority. */
+ import { randomUUID } from 'node:crypto'
+-import { posix } from 'node:path'
++import { normalizeNodeDirectory, nodeDirectoryContains } from './node-directory.js'
+ import type { AuthService } from './auth.js'
+ import type { SecurityDatabase } from './security-db.js'
+ import type { WorkStore } from './store.js'
+@@ -54,15 +54,15 @@
+ const label = (resource: { id: string; name: string }) => ({ id: resource.id, name: resource.name })
+ const nonempty = (v: unknown): v is string => typeof v === 'string' && Boolean(v.trim()) && v.length <= 2048 && !/[\x00-\x1f\x7f]/.test(v)
+ function path(value: unknown): string {
+-  if (!nonempty(value) || !posix.isAbsolute(value) || value.includes('\\')) return fail('INVALID_DIRECTORY', 400)
+-  return posix.normalize(value).replace(/\/$/, '') || '/'
++  if (!nonempty(value)) return fail('INVALID_DIRECTORY', 400)
++  try { return normalizeNodeDirectory(value) } catch { return fail('INVALID_DIRECTORY', 400) }
+ }
+ function canonical(value: unknown): string {
+   const normalized = path(value)
+   if (value !== normalized && value !== normalized + '/') return fail('NON_CANONICAL_DIRECTORY', 400)
+   return normalized
+ }
+-const contains = (root: string, directory: string) => directory === root || directory.startsWith(root === '/' ? '/' : root + '/')
++const contains = nodeDirectoryContains
+ const allowed = (roots: string[], directory: string) => roots.some(root => contains(root, directory))
+ 
+ export class AccessCenter {
+diff --git a/src/access-center.test.ts b/src/access-center.test.ts
+--- a/src/access-center.test.ts
++++ b/src/access-center.test.ts
+@@ -640,6 +640,18 @@
+   } finally { f.close() }
+ })
+ 
++test('Windows node pairing persists native drive roots and validates directory discovery', async () => {
++  const f = await fixture()
++  try {
++    const root = 'C:\\Users\\test\\project'
++    f.gateway.pair = async (_input, actor) => ({ ...node(), id: 'windows-node', nodeId: 'windows-physical', dshRef: { kind: 'mapping', mappingId: 'windows-map' }, roots: [root], ownerUserId: actor.userId })
++    f.gateway.resolveDirectory = async (_node, target) => ({ path: target, entries: [] })
++    const paired = await f.service.pair(f.alice, { baseUrl: node().baseUrl, pairingCode: 'windows-ticket' })
++    assert.equal(paired.owned, true)
++    assert.deepEqual(f.service.nodes(f.alice)[0].roots, [root])
++  } finally { f.close() }
++})
++
+ test('pairing requires an actual one-time code; regular users cannot register arbitrary nodes', async () => {
+   const f = await fixture()
+   try {
+diff --git a/src/node-directory.ts b/src/node-directory.ts
+new file mode 100644
+--- /dev/null
++++ b/src/node-directory.ts
+@@ -0,0 +1,21 @@
++/** Remote paths use the node's syntax, never the platform server's OS syntax. */
++import { posix, win32 } from 'node:path'
++const windows = (value: string) => /^[a-z]:[\\/]/i.test(value)
++export function normalizeNodeDirectory(value: string): string {
++  if (!value || value.length > 2048 || /[\x00-\x1f\x7f]/.test(value)) throw new Error('INVALID_DIRECTORY')
++  if (windows(value)) {
++    if (value.slice(2).includes(':') || /[*?"<>|]/.test(value) || value.slice(3).split(/[\\/]/).some(p => /[. ]$/.test(p) && p !== '.' && p !== '..')) throw new Error('INVALID_DIRECTORY')
++    const result = win32.normalize(value.replace(/\//g, '\\'))
++    return result.length > 3 ? result.replace(/\\$/, '') : result
++  }
++  if (!posix.isAbsolute(value) || value.includes('\\') || value.startsWith('//')) throw new Error('INVALID_DIRECTORY')
++  return posix.normalize(value).replace(/\/$/, '') || '/'
++}
++export function nodeDirectoryContains(root: string, directory: string): boolean {
++  if (windows(root) !== windows(directory)) return false
++  if (windows(root)) {
++    const rel = win32.relative(root, directory)
++    return !rel || rel !== '..' && !rel.startsWith('..\\') && !win32.isAbsolute(rel)
++  }
++  return directory === root || directory.startsWith(root === '/' ? '/' : root + '/')
++}
+diff --git a/src/node-directory.test.ts b/src/node-directory.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/node-directory.test.ts
+@@ -0,0 +1,18 @@
++import test from 'node:test'
++import assert from 'node:assert/strict'
++import { normalizeNodeDirectory as normalize, nodeDirectoryContains as contains } from './node-directory.js'
++test('accepts Windows node roots on Linux server without changing their native representation', () => {
++  assert.equal(normalize('C:\\Users\\user\\project'), 'C:\\Users\\user\\project')
++  assert.equal(normalize('C:/Users/user/project/'), 'C:\\Users\\user\\project')
++  assert.equal(normalize('/home/user/project/'), '/home/user/project')
++  assert.equal(normalize('C:\\'), 'C:\\')
++})
++test('directory boundaries reject sibling prefixes traversal and other drives', () => {
++  assert.equal(contains('C:\\Work', 'c:\\work\\project'), true)
++  for (const target of ['C:\\Work2', 'C:\\Work\\..\\secret', 'D:\\Work', '/Work']) assert.equal(contains('C:\\Work', target), false)
++  assert.equal(contains('/home/User', '/home/user/project'), false)
++  assert.equal(contains('/home/user', '/home/user2'), false)
++})
++test('rejects relative device UNC and alternate stream paths', () => {
++  for (const value of ['C:project','project','\\\\server\\share','\\\\?\\C:\\project','C:\\project:stream','C:\\bad?name']) assert.throws(()=>normalize(value))
++})

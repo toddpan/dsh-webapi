@@ -42,6 +42,8 @@ import { promises as fs, constants as F } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
+import { windowsPath, windowsPython } from './windows-paths.mjs'
+const windows = process.platform === 'win32'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const helper = path.join(here, 'security-node-fs.py')
@@ -86,6 +88,7 @@ export async function invokeTextAgent(runtime, input) {
 }
 
 async function privatePath(target, directory = false) {
+  if (windows) return windowsPath(target, directory)
   requireThat(path.isAbsolute(target) && path.normalize(target) === target && target !== '/', 'INVALID_CONFIG_PATH')
   const parts = target.split('/').filter(Boolean)
   let current = '/'
@@ -102,7 +105,7 @@ async function readPrivate(file) {
   const handle = await fs.open(file, F.O_RDONLY | F.O_NOFOLLOW)
   try {
     const st = await handle.stat()
-    requireThat(!(st.mode & 0o077) && st.size <= 1_000_000, 'PRIVATE_CONFIG_REQUIRED')
+    requireThat((windows || !(st.mode & 0o077)) && st.size <= 1_000_000, 'PRIVATE_CONFIG_REQUIRED')
     return await handle.readFile('utf8')
   } finally { await handle.close() }
 }
@@ -142,8 +145,10 @@ function python(args) {
     env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8' }, stdio: ['pipe', 'pipe', 'pipe'],
   })
 }
-function createBroker() {
-  const child = python(process.platform === 'darwin' ? ['--darwin-files'] : [])
+function createBroker(pythonPath) {
+  const child = windows ? spawn(pythonPath, ['-I', '-X', 'utf8', path.join(here, 'security-node-windows.py')], {
+    env: { SystemRoot: process.env.SystemRoot, PYTHONIOENCODING: 'utf-8' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+  }) : python(process.platform === 'darwin' ? ['--darwin-files'] : [])
   const pending = new Map()
   let dead = false
   let sequence = 0
@@ -199,7 +204,7 @@ export async function startSecurityNode(config, protocol) {
   const P = protocol
   // 宿主显式开启 allowRoot 时放行 root：uid 归属校验失去隔离意义，路径范围防线
   // （pinned 目录 + O_NOFOLLOW + 祖先目录校验）保留；仅限 DSH 宿主本身即 root 的单用户机器。
-  requireThat(['linux', 'darwin'].includes(process.platform)
+  requireThat(windows || ['linux', 'darwin'].includes(process.platform)
     && (process.getuid?.() !== 0 || config.allowRoot === true), 'UNPRIVILEGED_UNIX_REQUIRED')
   requireThat(identifier(config.nodeId) && config.issuerKeys && typeof config.issuerKeys === 'object', 'INVALID_NODE_CONFIG')
   requireThat(['127.0.0.1', '::1'].includes(config.host ?? '127.0.0.1'), 'LOOPBACK_BIND_REQUIRED')
@@ -217,13 +222,13 @@ export async function startSecurityNode(config, protocol) {
   for (const ws of config.workspaces) {
     requireThat(identifier(ws.workspaceId) && !workspaces.has(ws.workspaceId) && Number.isSafeInteger(ws.policyVersion) && ws.policyVersion > 0, 'INVALID_WORKSPACE')
     await privatePath(ws.root, true)
-    requireThat((await fs.stat(ws.root)).uid === process.getuid(), 'ROOT_OWNER_REQUIRED')
+    requireThat(windows || (await fs.stat(ws.root)).uid === process.getuid(), 'ROOT_OWNER_REQUIRED')
     requireThat(!rootPaths.some(r => r === ws.root || r.startsWith(ws.root + '/') || ws.root.startsWith(r + '/')), 'OVERLAPPING_ROOTS')
     rootPaths.push(ws.root)
     workspaces.set(ws.workspaceId, Object.freeze({ ...ws, nodeId: config.nodeId }))
   }
   await privatePath(config.stateDir, true)
-  requireThat((await fs.stat(config.stateDir)).uid === process.getuid(), 'STATE_OWNER_REQUIRED')
+  requireThat(windows || (await fs.stat(config.stateDir)).uid === process.getuid(), 'STATE_OWNER_REQUIRED')
   const stateFile = name => path.join(config.stateDir, name)
   const readState = async (name, fallback) => {
     try { return JSON.parse(await readPrivate(stateFile(name))) }
@@ -248,15 +253,15 @@ export async function startSecurityNode(config, protocol) {
   const baseWorkspaces = [...workspaces.values()]
   const dynamicWorkspaces = await readState('catalog-workspaces.json', [])
   requireThat(Array.isArray(dynamicWorkspaces) && dynamicWorkspaces.length <= 4096, 'INVALID_WORKSPACE_CATALOG')
-  const within = (root, target) => { const rel = path.relative(root, target); return !rel || rel !== '..' && !rel.startsWith('../') && !path.isAbsolute(rel) }
-  const broker = createBroker()
+  const within = (root, target) => { const rel = path.relative(root, target); return !rel || rel !== '..' && !(rel.startsWith('../') || rel.startsWith('..\\')) && !path.isAbsolute(rel) }
+  const broker = createBroker(windows ? await windowsPython() : undefined)
   try {
     await broker.call({ op: 'init', workspaces: [...workspaces.values()] })
     for (const ws of dynamicWorkspaces) {
       const parent = baseWorkspaces.find(root => within(root.root, ws.root))
       requireThat(parent && identifier(ws.workspaceId) && ws.policyVersion === parent.policyVersion, 'INVALID_WORKSPACE_CATALOG')
       try {
-        await broker.call({ op: 'register-child', parentWorkspaceId: parent.workspaceId, relative: path.relative(parent.root, ws.root) || '.', workspace: ws })
+        await broker.call({ op: 'register-child', parentWorkspaceId: parent.workspaceId, relative: path.relative(parent.root, ws.root).split(path.sep).join('/') || '.', workspace: ws })
       } catch (error) {
         // 重放目录枚举被安全策略拒绝（符号链接/不受信条目等）：与 catalog/resolve 的降级一致，
         // 工作区登记保留；实际文件访问仍按各自工作区走严格校验。
@@ -492,7 +497,7 @@ export async function startSecurityNode(config, protocol) {
           requireThat(issuerKeys.get(value.issuerKeyId) === value.issuerPublicKey, 'UNKNOWN_ISSUER')
           const target = value.payload?.path
           requireThat(typeof target === 'string' && path.isAbsolute(target) && path.normalize(target) === target
-            && target !== '/' && !/[\\\x00-\x1f\x7f]/.test(target), 'INVALID_CATALOG_PATH')
+            && target !== path.parse(target).root && !(windows ? /[\x00-\x1f\x7f]/ : /[\\\x00-\x1f\x7f]/).test(target), 'INVALID_CATALOG_PATH')
           const parent = baseWorkspaces.filter(root => within(root.root, target)).sort((a, b) => b.root.length - a.root.length)[0]
           requireThat(parent, 'PATH_DENIED')
           const ws = { workspaceId: 'catalog-' + createHash('sha256').update(target).digest('hex').slice(0, 40),
@@ -500,7 +505,7 @@ export async function startSecurityNode(config, protocol) {
           let checked
           try {
             checked = await broker.call({ op: 'register-child', parentWorkspaceId: parent.workspaceId,
-              relative: path.relative(parent.root, target) || '.', workspace: ws })
+              relative: path.relative(parent.root, target).split(path.sep).join('/') || '.', workspace: ws })
           } catch (error) {
             // 枚举被安全策略拒绝（符号链接/不受信条目等，真实开发目录常见）：注册解析不被目录内容
             // 阻塞，工作区仍按 base 范围登记；各工作区的实际文件访问继续走严格校验。

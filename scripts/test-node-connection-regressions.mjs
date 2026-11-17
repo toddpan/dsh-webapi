@@ -50,7 +50,7 @@ test('saved password survives restart and temporary relogin failures, then heals
   assert.equal(loginCount, 3)
 })
 
-test('Windows starts and restores transport while retaining the isolated-node platform gate', async t => {
+test('Windows completes node pairing and restores its runtime with the transport', async t => {
   const dir = await temp(t)
   const calls = []
   const state = { configured: false, settings: { autoStart: true }, clientId: 'fixture-client' }
@@ -62,12 +62,13 @@ test('Windows starts and restores transport while retaining the isolated-node pl
   }
   const account = {
     status: async () => ({ configured: true, passwordSaved: true, username: 'fixture-user', serverUrl: 'https://fixture.example' }),
-    call: async endpoint => { calls.push(endpoint.split('?')[0]); return endpoint === 'provision' ? { config: 'fixture', client_id: 'fixture-client' } : { online: true } },
+    call: async endpoint => { calls.push(endpoint.split('?')[0]); return endpoint === 'provision' ? { config: 'fixture', client_id: 'fixture-client' } : endpoint === 'bind' ? { id: 'bound-node', name: 'fixture' } : { online: true } },
+    bound: async id => { assert.equal(id, 'bound-node') },
   }
   const runtime = {
-    status: () => ({ platform: 'win32', errorCode: 'NODE_PLATFORM_UNSUPPORTED' }),
-    prepare: async () => { throw new Error('runtime gate must not be bypassed') },
-    createPairing: async () => { throw new Error('Windows must not mint node pairing') },
+    status: () => ({ platform: 'win32', running: true }),
+    prepare: async () => { calls.push('prepare') },
+    createPairing: async () => ({ pairingCode: 'fixture', expiresAt: Date.now()+300000, name: 'fixture' }),
     close: async () => {},
   }
   const onboarding = new NodeOnboarding({ get: () => null }, {}, { dir }, {
@@ -76,12 +77,12 @@ test('Windows starts and restores transport while retaining the isolated-node pl
   onboarding.managedKey = async () => 'fixture-key'
   t.after(() => onboarding.close())
   const result = await onboarding.loginAndBind()
-  assert.equal(result.transportOnly, true)
-  assert.deepEqual(calls, ['provision', 'start', 'status'])
-  assert.equal((await onboarding.status()).node.errorCode, 'NODE_PLATFORM_UNSUPPORTED')
+  assert.equal(result.nodeId, 'bound-node')
+  assert.deepEqual(calls, ['prepare', 'provision', 'start', 'status', 'bind'])
+  assert.equal((await onboarding.status()).node.running, true)
   calls.length = 0
   await onboarding.restore()
-  assert.deepEqual(calls, ['provision', 'start', 'status'])
+  assert.deepEqual(calls, ['provision', 'start', 'status', 'prepare'])
 })
 
 test('saved unbound account displays reuse controls and sends bind without a browser password', async () => {
@@ -121,7 +122,7 @@ test('saved unbound account displays reuse controls and sends bind without a bro
   assert.equal(element('nodeReconnectButton').hidden, true)
   assert.equal(element('nodeStopButton').hidden, false)
   assert.equal(element('nodeOnenatReinstall').disabled, true)
-  assert.equal(element('nodeGenerateButton').disabled, true)
+  assert.equal(element('nodeGenerateButton').disabled, false)
   context.NODE_LAST_STATE.tunnel = { installed: false, running: false, phase: 'error' }
   context.NODE_INSTALL_ACTIVE = true
   context.updateNodeActions()

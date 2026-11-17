@@ -254,10 +254,7 @@ export class NodeOnboarding {
         if (!service.ok) throw new Error(service.error)
         const apiKey = await this.managedKey()
         await this.workspaceReady
-        // Transport is supported on Windows; isolated node execution is not.
-        // Keep the runtime's platform gate intact, while allowing the tunnel to start.
-        const transportOnly = this.runtime.status().platform === 'win32'
-        if (!transportOnly) await this.runtime.prepare()
+        await this.runtime.prepare()
         const state = await this.tunnel.status()
         const installationId = state.clientId
         const provision = await this.account.call('provision', { installationId,
@@ -276,13 +273,6 @@ export class NodeOnboarding {
           await new Promise(resolve => setTimeout(resolve, 750))
         }
         if (!online.origin || online.phase !== 'online') throw new Error('等待 ONENAT 外网映射超时，请重试')
-        if (transportOnly) {
-          this.lastError = ''
-          this.monitorRemote()
-          return { transportOnly: true, name: account.name || hostname(), baseUrl: online.origin,
-            workBuddyUrl: account.serverUrl, username: account.username,
-            message: 'ONENAT 外网连接已启动；Windows 暂不支持安全节点绑定。' }
-        }
         const ticket = await this.runtime.createPairing()
         const payload = { version: 1, baseUrl: online.origin, pairingCode: ticket.pairingCode,
           name: input?.name || account.name || ticket.name, expiresAt: ticket.expiresAt }
@@ -350,7 +340,7 @@ export class NodeOnboarding {
         await this.refreshRemote(); this.monitorRemote()
       } else await this.tunnel.start()
       await this.workspaceReady
-      if (this.runtime.status().platform !== 'win32') await this.runtime.prepare()
+      await this.runtime.prepare()
       this.lastError = ''
     } catch (err: any) { this.lastError = err.message || '节点连接恢复失败' }
   }
