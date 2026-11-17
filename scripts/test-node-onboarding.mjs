@@ -498,6 +498,19 @@ smoke('workspace roots follow the DSH registry by default and a custom list over
     const rejected = await request(f.mainPort, '/workspace', { method: 'POST', headers: f.localHeaders({ 'x-node-setup-token': token }), body: bad })
     assert.equal(rejected.status, 400, rejected.text)
   }
+  // 重放容错：含符号链接的目录工作区被降级登记后，再触发 prepare（重绑）必须能重启安全节点
+  const bindsBeforeResave = f.record.calls.filter(call => call.path.endsWith('/bind')).length
+  const resave = await request(f.mainPort, '/workspace', { method: 'POST', headers: f.localHeaders({ 'x-node-setup-token': token }), body: { mode: 'custom', roots: [customDir] } })
+  assert.equal(resave.status, 200, resave.text)
+  assert.equal(resave.body.data.applying, true)
+  const resaveDeadline = Date.now() + 15000
+  while (Date.now() < resaveDeadline) {
+    if (f.record.calls.filter(call => call.path.endsWith('/bind')).length > bindsBeforeResave
+      && (await f.node.tunnel.status()).phase === 'online') break
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+  assert.equal(f.node.runtime.status().running, true, 'replaying a fallback-registered workspace must not prevent node startup')
+  assert.deepEqual(f.node.runtime.status().roots, [customDir])
   const bindsBefore = f.record.calls.filter(call => call.path.endsWith('/bind')).length
   const reset = await request(f.mainPort, '/workspace', { method: 'POST', headers: f.localHeaders({ 'x-node-setup-token': token }), body: { mode: 'default' } })
   assert.equal(reset.status, 200, reset.text)

@@ -255,7 +255,13 @@ export async function startSecurityNode(config, protocol) {
     for (const ws of dynamicWorkspaces) {
       const parent = baseWorkspaces.find(root => within(root.root, ws.root))
       requireThat(parent && identifier(ws.workspaceId) && ws.policyVersion === parent.policyVersion, 'INVALID_WORKSPACE_CATALOG')
-      await broker.call({ op: 'register-child', parentWorkspaceId: parent.workspaceId, relative: path.relative(parent.root, ws.root) || '.', workspace: ws })
+      try {
+        await broker.call({ op: 'register-child', parentWorkspaceId: parent.workspaceId, relative: path.relative(parent.root, ws.root) || '.', workspace: ws })
+      } catch (error) {
+        // 重放目录枚举被安全策略拒绝（符号链接/不受信条目等）：与 catalog/resolve 的降级一致，
+        // 工作区登记保留；实际文件访问仍按各自工作区走严格校验。
+        if (!/^(UNSAFE_FILE|UNTRUSTED_FILE|FILE_TOO_LARGE|DIRECTORY_TOO_LARGE)$/.test(String(error?.code ?? ''))) throw error
+      }
       workspaces.set(ws.workspaceId, Object.freeze(ws))
     }
   } catch (err) { broker.child.kill(); await broker.done; throw err }

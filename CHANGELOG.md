@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.4 — 2026-11-17
+
+Survive persisted workspaces whose directory enumeration is refused by the security policy.
+
+- The startup replay of persisted dynamic workspaces now tolerates content-policy rejections (`UNSAFE_FILE`/`UNTRUSTED_FILE`/`FILE_TOO_LARGE`/`DIRECTORY_TOO_LARGE`), matching the 0.7.0 resolve-time fallback. Previously a fallback-registered workspace (e.g. a directory containing symlinks) poisoned every later security-node start once the registered roots were widened to include it — the node stayed down with 「安全节点运行时不可用（UNSAFE_FILE）」 while the tunnel stayed online, and rebinds never reached the platform.
+- E2E regression: re-saving the same symlink-containing custom root re-runs prepare and asserts the security node starts and serves the roots.
+
+Validation: TypeScript typecheck and build; the full node onboarding E2E suite, node runtime and oneNat tunnel unit suites remain green; live root-host deployment verified.
+
 ## 0.7.3 — 2026-11-17
 
 Honor `nodeAllowRoot` through to the security node process itself — 0.7.2 gated the plugin-side preflight but the vendored `startSecurityNode` still rejected root, so root-host deployments could not start the node at all.
