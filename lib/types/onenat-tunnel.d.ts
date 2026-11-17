@@ -22,6 +22,15 @@ export interface OnenatManagedInput {
     remotePort?: number;
     autoStart?: boolean;
 }
+export interface OnenatInstallProgress {
+    phase: 'resolving' | 'checksums' | 'downloading' | 'verifying' | 'installing' | 'done';
+    message: string;
+    startedAt: number;
+    bytesDone?: number;
+    bytesTotal?: number;
+    percent?: number;
+    attempt?: number;
+}
 export interface OnenatRemoteState {
     online?: boolean;
     public_url?: string;
@@ -50,6 +59,7 @@ export interface OnenatTunnelState {
     startedAt?: number;
     restarts: number;
     binaryPath?: string;
+    installProgress?: OnenatInstallProgress;
     settings: Omit<OnenatTunnelSettings, 'password'> & {
         passwordSet: boolean;
     };
@@ -70,6 +80,7 @@ export declare function onenatReleaseAsset(platform?: string, arch?: string): st
 export declare function compareVersionTags(a: string, b: string): number;
 export declare function installOnenatClient(options: Pick<OnenatTunnelOptions, 'dir' | 'fetch' | 'platform' | 'arch'> & {
     refresh?: boolean;
+    onProgress?: (progress: OnenatInstallProgress) => void;
 }): Promise<{
     binary: string;
     releaseTag: string;
@@ -85,6 +96,7 @@ export declare class OnenatTunnel {
     private child?;
     private binary?;
     private releaseTag?;
+    private installProgress?;
     private startedAt?;
     private restarts;
     private readonly logs;

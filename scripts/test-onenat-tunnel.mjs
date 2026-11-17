@@ -196,6 +196,44 @@ test('upgrade swaps in the newer release and keeps the old binary when verificat
   assert.equal(launches.length, 3, 'failed upgrade must restore the previous process')
 })
 
+test('installation reports streamed bytes and clears download metrics before verification', async t => {
+  const dir = await temp(t); const progress = []; const transport = downloads()
+  await installOnenatClient({ dir, platform: 'linux', arch: 'x64', fetch: async input => {
+    if (String(input).endsWith('/' + asset)) return new Response(bytes, { headers: { 'content-length': String(bytes.length) } })
+    return transport.fetch(input)
+  }, onProgress: state => progress.push(state) })
+  assert.deepEqual([...new Set(progress.map(p => p.phase))], ['resolving', 'checksums', 'downloading', 'verifying', 'installing', 'done'])
+  assert.ok(progress.some(p => p.phase === 'downloading' && p.bytesDone === bytes.length && p.percent === 100))
+  const verified = progress.find(p => p.phase === 'verifying')
+  assert.equal(verified.percent, undefined)
+  assert.equal(verified.bytesDone, undefined)
+  assert.ok(progress.every(p => p.startedAt === progress[0].startedAt))
+})
+
+test('status remains readable during a blocked download and unknown totals stay unknown', async t => {
+  const dir = await temp(t); const transport = downloads(); let release; let reached
+  const requested = new Promise(resolve => { reached = resolve })
+  const pending = new Promise(resolve => { release = resolve })
+  const tunnel = manager(dir, { fetch: async input => {
+    if (String(input).endsWith('/' + asset)) {
+      reached()
+      await pending
+      return new Response(bytes)
+    }
+    return transport.fetch(input)
+  } })
+  t.after(() => tunnel.close())
+  const start = tunnel.startManaged(managed)
+  await requested
+  const state = await tunnel.status()
+  assert.equal(state.phase, 'installing')
+  assert.equal(state.installProgress.phase, 'downloading')
+  assert.equal(state.installProgress.percent, undefined)
+  assert.equal(state.installProgress.bytesTotal, undefined)
+  release()
+  assert.equal((await start).installProgress.phase, 'done')
+})
+
 test('log tail keeps recent sanitized lines for the settings UI', async t => {
   const dir = await temp(t); const launches = []
   const tunnel = manager(dir, downloads(), launches); t.after(() => tunnel.close())

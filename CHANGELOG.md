@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.1 — 2026-11-17
+
+- Show ONENAT installation stages, streamed download size, percentage when available, elapsed time and retry attempts above all node-connection tabs.
+- Keep polling status during login, installation and upgrade; prevent overlapping status requests and retain operation results.
+- Clear download metrics before verification and installation. Unknown download sizes use an indeterminate progress indicator.
+- Report temporary progress-query failures without encouraging duplicate submissions.
+
+Validation: TypeScript compilation, 12 ONENAT tunnel tests (including blocked-download status and progress transitions), embedded page script/render checks, and live verification that the running service serves the updated UI. Full node-onboarding integration tests could not run because the local WorkBuddy backend checkout lacks the required fixture sources.
+
 ## 0.7.0 — 2026-11-17
 
 One-login WorkBuddy node onboarding gets a tabbed management card, remembers credentials, makes workspace directories configurable and exposes the oneNat client lifecycle.

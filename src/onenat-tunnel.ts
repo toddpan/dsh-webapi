@@ -28,6 +28,15 @@ export interface OnenatManagedInput {
   remotePort?: number
   autoStart?: boolean
 }
+export interface OnenatInstallProgress {
+  phase: 'resolving' | 'checksums' | 'downloading' | 'verifying' | 'installing' | 'done'
+  message: string
+  startedAt: number
+  bytesDone?: number
+  bytesTotal?: number
+  percent?: number
+  attempt?: number
+}
 export interface OnenatRemoteState { online?: boolean; public_url?: string; error?: string }
 export interface OnenatTunnelState {
   configured: boolean
@@ -52,6 +61,7 @@ export interface OnenatTunnelState {
   startedAt?: number
   restarts: number
   binaryPath?: string
+  installProgress?: OnenatInstallProgress
   settings: Omit<OnenatTunnelSettings, 'password'> & { passwordSet: boolean }
 }
 interface PrivateState {
@@ -119,7 +129,7 @@ function checksumFor(text: string, asset: string): string {
   }
   throw new Error('ONENAT checksums.txt 未包含 ' + asset)
 }
-async function bodyBytes(response: Response, max: number): Promise<Buffer> {
+async function bodyBytes(response: Response, max: number, onProgress?: (done: number, total?: number) => void): Promise<Buffer> {
   if (!response.ok) throw new Error('下载 ONENAT 失败：HTTP ' + response.status)
   const declared = Number(response.headers.get('content-length') || 0)
   if (declared > max) throw new Error('ONENAT 下载文件超过大小限制')
@@ -127,6 +137,7 @@ async function bodyBytes(response: Response, max: number): Promise<Buffer> {
   const reader = response.body.getReader()
   let length = 0
   const chunks: Buffer[] = []
+  onProgress?.(0, declared > 0 ? declared : undefined)
   try {
     for (;;) {
       const { value, done } = await reader.read()
@@ -134,6 +145,7 @@ async function bodyBytes(response: Response, max: number): Promise<Buffer> {
       length += value.byteLength
       if (length > max) throw new Error('ONENAT 下载文件超过大小限制')
       chunks.push(Buffer.from(value))
+      onProgress?.(length, declared > 0 ? declared : undefined)
     }
   } finally { await reader.cancel().catch(() => {}) }
   return Buffer.concat(chunks)
@@ -148,11 +160,12 @@ async function privateWrite(file: string, content: string | Buffer, mode = 0o600
   } finally { await fs.unlink(temporary).catch(() => {}) }
 }
 
-async function downloadBytes(fetcher: typeof globalThis.fetch, url: string, timeoutMs: number, maxBytes: number): Promise<Buffer> {
+async function downloadBytes(fetcher: typeof globalThis.fetch, url: string, timeoutMs: number, maxBytes: number, onProgress?: (done: number, total: number | undefined, attempt: number) => void): Promise<Buffer> {
   let last: unknown
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      return await bodyBytes(await fetcher(url, { signal: AbortSignal.timeout(timeoutMs) }), maxBytes)
+      onProgress?.(0, undefined, attempt + 1)
+      return await bodyBytes(await fetcher(url, { signal: AbortSignal.timeout(timeoutMs) }), maxBytes, (done, total) => onProgress?.(done, total, attempt + 1))
     } catch (error) {
       last = error
       await new Promise(resolve => setTimeout(resolve, 1_000 * (attempt + 1)))
@@ -160,7 +173,10 @@ async function downloadBytes(fetcher: typeof globalThis.fetch, url: string, time
   }
   throw last
 }
-export async function installOnenatClient(options: Pick<OnenatTunnelOptions, 'dir' | 'fetch' | 'platform' | 'arch'> & { refresh?: boolean }): Promise<{ binary: string; releaseTag: string }> {
+export async function installOnenatClient(options: Pick<OnenatTunnelOptions, 'dir' | 'fetch' | 'platform' | 'arch'> & { refresh?: boolean; onProgress?: (progress: OnenatInstallProgress) => void }): Promise<{ binary: string; releaseTag: string }> {
+  const startedAt = Date.now()
+  const report = (phase: OnenatInstallProgress['phase'], message: string, extra: Partial<OnenatInstallProgress> = {}) => options.onProgress?.({ phase, message, startedAt, ...extra })
+  report('resolving', '正在检查本地客户端与发行版')
   const fetcher = options.fetch ?? globalThis.fetch
   const asset = onenatReleaseAsset(options.platform, options.arch)
   const binary = path.join(options.dir, asset)
@@ -171,6 +187,7 @@ export async function installOnenatClient(options: Pick<OnenatTunnelOptions, 'di
       const bytes = await fs.readFile(binary)
       if (manifest.asset === asset && /^[a-f0-9]{64}$/.test(manifest.sha256) && createHash('sha256').update(bytes).digest('hex') === manifest.sha256) {
         await fs.chmod(binary, 0o700)
+        report('done', '已验证本地客户端，无需下载')
         return { binary, releaseTag: manifest.releaseTag }
       }
     } catch { /* Install only after verified cache lookup failed. */ }
@@ -178,12 +195,21 @@ export async function installOnenatClient(options: Pick<OnenatTunnelOptions, 'di
   const releaseTag = await latestReleaseTag(fetcher)
   if (!/^[a-zA-Z0-9._-]+$/.test(releaseTag)) throw new Error('ONENAT GitHub release tag 无效')
   const base = 'https://github.com/' + RELEASE_REPO + '/releases/download/' + encodeURIComponent(releaseTag) + '/'
+  report('checksums', '正在获取 SHA256 校验清单')
   const sums = await downloadBytes(fetcher, base + 'checksums.txt', 30_000, 2 * 1024 * 1024)
   const expected = checksumFor(sums.toString('utf8'), asset)
-  const bytes = await downloadBytes(fetcher, base + asset, 90_000, MAX_ASSET_BYTES)
+  const bytes = await downloadBytes(fetcher, base + asset, 90_000, MAX_ASSET_BYTES, (bytesDone, bytesTotal, attempt) => {
+    report('downloading', attempt > 1 ? `下载重试中（第 ${attempt}/3 次）` : '正在下载 ONENAT 客户端，首次下载可能需要几分钟', {
+      bytesDone, bytesTotal, attempt,
+      percent: bytesTotal ? Math.min(100, Math.floor(bytesDone / bytesTotal * 100)) : undefined,
+    })
+  })
+  report('verifying', '下载完成，正在校验 SHA256')
   if (createHash('sha256').update(bytes).digest('hex') !== expected) throw new Error('ONENAT 客户端 SHA256 校验失败，未安装')
+  report('installing', '校验通过，正在安装客户端')
   await privateWrite(binary, bytes, 0o700)
   await privateWrite(manifestFile, JSON.stringify({ asset, releaseTag, sha256: expected }))
+  report('done', '客户端安装完成')
   return { binary, releaseTag }
 }
 
@@ -207,6 +233,7 @@ export class OnenatTunnel {
   private child?: ChildProcess
   private binary?: string
   private releaseTag?: string
+  private installProgress?: OnenatInstallProgress
   private startedAt?: number
   private restarts = 0
   private readonly logs: string[] = []
@@ -270,7 +297,7 @@ export class OnenatTunnel {
       phase: this.phase, clientId: this.saved.clientId, serverUrl, name, protocol, subdomain, remotePort,
       localPort: this.opts.onLocalPort(), tunnelId: managed?.tunnelId, mappingId: managed?.mappingId,
       publicUrl: this.publicUrl, origin: this.origin, error: this.lastError, releaseTag: this.releaseTag,
-      startedAt: this.startedAt, restarts: this.restarts, binaryPath: this.binary,
+      startedAt: this.startedAt, restarts: this.restarts, binaryPath: this.binary, installProgress: this.installProgress,
       settings: { serverUrl, username: direct?.username ?? '', name, protocol, subdomain, remotePort, autoStart: managed?.autoStart ?? direct?.autoStart ?? true, passwordSet: !!direct?.password },
     }
   }
@@ -278,7 +305,7 @@ export class OnenatTunnel {
   private async install(): Promise<void> {
     if (this.binary) return
     this.phase = 'installing'
-    const installed = await installOnenatClient({ ...this.opts, fetch: this.fetcher })
+    const installed = await installOnenatClient({ ...this.opts, fetch: this.fetcher, onProgress: progress => { this.installProgress = progress } })
     this.binary = installed.binary; this.releaseTag = installed.releaseTag
   }
   private async terminate(): Promise<void> {
@@ -323,7 +350,7 @@ export class OnenatTunnel {
       await this.terminate()
       this.phase = 'installing'
       try {
-        const installed = await installOnenatClient({ ...this.opts, fetch: this.fetcher, refresh: true })
+        const installed = await installOnenatClient({ ...this.opts, fetch: this.fetcher, refresh: true, onProgress: progress => { this.installProgress = progress } })
         this.binary = installed.binary
         this.releaseTag = installed.releaseTag
         this.retries = 0
