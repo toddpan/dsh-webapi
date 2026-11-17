@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.2 — 2026-11-17
+
+Allow the WorkBuddy node security node to run under root via an explicit opt-in, for DSH hosts that themselves run as root.
+
+- New plugin config `nodeAllowRoot` (default `false`): the node runtime preflight rejects root (「安全节点必须以非 root 的 Unix 用户运行」) unless this is enabled. Under root the uid-ownership checks lose their isolation meaning and only the path-scoping defenses remain (pinned directories, `O_NOFOLLOW`, ancestor validation); intended for single-user machines — e.g. system-service DSH deployments — where the host itself runs as root and the node onboarding would otherwise be unavailable.
+- The preflight regression suite covers the root + `nodeAllowRoot` path (the root gate is skipped and the next gate, the Python probe, is reached).
+
+Validation: TypeScript typecheck and build; the full node onboarding E2E suite, node runtime and oneNat tunnel unit suites remain green.
+
 ## 0.7.1 — 2026-11-17
 
 - Show ONENAT installation stages, streamed download size, percentage when available, elapsed time and retry attempts above all node-connection tabs.

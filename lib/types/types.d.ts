@@ -159,6 +159,13 @@ export interface WebServiceConfig {
      * 默认仅允许本机（回环）管理密钥；确需远程管理时显式开启。
      */
     adminRemoteAccess?: boolean;
+    /**
+     * 是否允许 WorkBuddy 节点的安全节点在 root 下运行，默认 false（显式拒绝 root）。
+     * 以 root 运行时 uid 归属类校验失去隔离意义（本机文件对 root 全部可达），仅保留路径
+     * 范围防线（pinned 目录 + O_NOFOLLOW + 祖先目录校验）；仅适合 DSH 宿主本身即以 root
+     * 运行的单用户机器（如随系统服务部署的设备）按需开启。
+     */
+    nodeAllowRoot?: boolean;
     /** 技能管理：额外自定义技能根目录（root=custom 时使用） */
     customSkillDirs?: string[];
     /** 技能管理：DSH 配置根（默认 $DSH_HOME 或 ~/.dsh） */

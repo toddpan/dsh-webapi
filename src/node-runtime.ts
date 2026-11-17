@@ -20,6 +20,11 @@ export interface NodeRuntimeOptions {
   getRoots: () => Promise<string[]> | string[]
   /** Public DSH API URL and a non-expiring, randomly generated managed API key. */
   getDshRef: () => Promise<any>
+  /**
+   * 以 root 运行安全节点（默认 false，preflight 显式拒绝）。uid 归属校验在 root 下失去
+   * 隔离意义，仅保留路径范围防线；仅限 DSH 宿主本身即 root 的单用户机器显式开启。
+   */
+  allowRoot?: boolean
 }
 
 export interface NodePairing {
@@ -177,7 +182,7 @@ export class NodeRuntime {
 
   private async preflight(): Promise<void> {
     requireThat(['darwin', 'linux'].includes(process.platform), 'NODE_PLATFORM_UNSUPPORTED')
-    requireThat(typeof process.getuid === 'function' && process.getuid() !== 0, 'UNPRIVILEGED_UNIX_REQUIRED')
+    requireThat(typeof process.getuid === 'function' && (process.getuid() !== 0 || this.options.allowRoot === true), 'UNPRIVILEGED_UNIX_REQUIRED')
     if (this.preflightDone) return
     try {
       await execFileAsync('/usr/bin/python3', ['-I', '-c',

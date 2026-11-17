@@ -70,6 +70,7 @@ export class NodeOnboarding {
     this.workspaceReady = this.loadWorkspace()
     this.tunnel = dependencies.tunnel ?? new OnenatTunnel({ dir: path.join(this.dir, 'onenat'), onLocalPort: options.getLocalPort })
     this.runtime = dependencies.runtime ?? new NodeRuntime({ dir: path.join(keys.dir, 'workbuddy-node'), keyStore: keys,
+      allowRoot: config.nodeAllowRoot === true,
       getRoots: () => this.roots(), getDshRef: async () => {
         const tunnel = await this.tunnel.status()
         if (!tunnel.origin || tunnel.phase !== 'online') throw new Error('公网映射尚未就绪，请先连接 ONENAT')

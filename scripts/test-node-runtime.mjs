@@ -310,15 +310,17 @@ smoke('pause resumes without rotating identity and prepare restores an unused ti
 })
 
 test('preflight reports explicit unavailable errors for simulated Windows, root and missing Python', async () => {
-  for (const [name, setup, code] of [
+  for (const [name, setup, code, optionsJs = ''] of [
     ['windows', "Object.defineProperty(process, 'platform', { value: 'win32' });", 'NODE_PLATFORM_UNSUPPORTED'],
     ['root', "Object.defineProperty(process, 'platform', { value: 'linux' }); process.getuid = () => 0;", 'UNPRIVILEGED_UNIX_REQUIRED'],
     ['python', "Object.defineProperty(process, 'platform', { value: 'darwin' }); process.getuid = () => 501; child.execFile = (...args) => { queueMicrotask(() => args.at(-1)(Object.assign(new Error('missing'), {code:'ENOENT'}))); }; syncBuiltinESMExports();", 'PYTHON_UNAVAILABLE'],
+    // allowRoot 放过 root 门（root 模拟用户）后应到达下一个门（Python 探测）
+    ['root-allowRoot-python', "Object.defineProperty(process, 'platform', { value: 'linux' }); process.getuid = () => 0; child.execFile = (...args) => { queueMicrotask(() => args.at(-1)(Object.assign(new Error('missing'), {code:'ENOENT'}))); }; syncBuiltinESMExports();", 'PYTHON_UNAVAILABLE', 'allowRoot: true'],
   ]) {
     const dir = path.join(temporary, 'preflight-' + name)
     const source = "import child from 'node:child_process'; import {syncBuiltinESMExports} from 'node:module'; import assert from 'node:assert/strict'; "
       + setup + " const {NodeRuntime} = await import(" + JSON.stringify(pathToFileURL(path.join(pkg, 'lib/node-runtime.js')).href) + ");"
-      + " const runtime = new NodeRuntime({dir:" + JSON.stringify(dir) + ",keyStore:{},getRoots:()=>[],getDshRef:async()=>null});"
+      + " const runtime = new NodeRuntime({dir:" + JSON.stringify(dir) + ",keyStore:{},getRoots:()=>[],getDshRef:async()=>null" + (optionsJs ? ', ' + optionsJs : '') + "});"
       + " await assert.rejects(runtime.prepare(),error=>error.code===" + JSON.stringify(code) + "); assert.equal(runtime.status().running,false); await runtime.close();"
     await execFileAsync(process.execPath, ['--input-type=module', '-e', source], { timeout: 5000, maxBuffer: 4096 })
     await assert.rejects(lstat(dir), error => error.code === 'ENOENT')
