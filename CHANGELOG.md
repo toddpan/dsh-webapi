@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.5 — 2026-11-17
+
+Keep the login-chosen node name across rebinds.
+
+- The rebind connection info now carries the account's node name (`account.name`) before falling back to the hostname, so work on the settings card (workspace change / reconnect) no longer renames the platform node to the machine hostname.
+
+Validation: TypeScript typecheck and build; the full node onboarding E2E suite (29 items) remains green with a new name-retention assertion.
+
 ## 0.7.4 — 2026-11-17
 
 Survive persisted workspaces whose directory enumeration is refused by the security policy.

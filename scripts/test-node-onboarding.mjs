@@ -527,6 +527,9 @@ smoke('workspace roots follow the DSH registry by default and a custom list over
   const cookie2 = f.record.calls.filter(call => call.path.endsWith('/provision')).at(-1).cookie
   const nodeView2 = f.access.nodes(f.auth.validateSession(cookie2.split('=')[1]))
   assert.deepEqual(nodeView2[0].roots, [f.workspace], 'rebind must refresh the roots registered on the WorkBuddy platform')
+  // 重绑的连接信息保持登录时设置的节点名，而不是回退到 hostname
+  const rebindPayload = JSON.parse(Buffer.from(f.record.calls.filter(call => call.path.endsWith('/bind')).at(-1).body.connectionInfo.slice(9), 'base64url'))
+  assert.equal(rebindPayload.name, 'test-node')
 })
 
 smoke('onenat client check-update and upgrade manage the release lifecycle', async t => {
