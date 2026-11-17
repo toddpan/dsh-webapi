@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.9 — 2026-11-17
+
+- Export package metadata and locale resources so DSH can display the installed plugin's name and feature description.
+- Add English and Simplified Chinese plugin titles and descriptions covering API access, streaming, API-key management, ONENAT tunnels and WorkBuddy node pairing.
+
 ## 0.7.8 — 2026-11-17
 
 - Rebuild and republish the current Windows node implementation under a new npm version so installations can explicitly select a fresh artifact. Runtime behavior is unchanged from 0.7.7.

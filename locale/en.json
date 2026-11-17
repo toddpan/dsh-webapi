@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH Web Service & WorkBuddy Connection",
+    "description": "Expose DSH workspaces, files, sessions and models through authenticated HTTP APIs, streaming responses and an OpenAI-compatible endpoint. Manage API keys and service settings, and connect this machine to WorkBuddy using the built-in ONENAT tunnel and node pairing. Windows nodes support directory browsing and file reading."
+  }
+}

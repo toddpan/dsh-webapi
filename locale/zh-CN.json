@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH Web 服务与 WorkBuddy 节点接入",
+    "description": "将 DSH 的工作区、文件、会话和模型开放为带鉴权的 HTTP API，支持流式响应与 OpenAI 兼容接口。提供 API 密钥和服务设置管理，内置 ONENAT 外网隧道，可登录 WorkBuddy 并配对本机节点。Windows 节点支持目录浏览和文件读取。"
+  }
+}
