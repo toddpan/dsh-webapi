@@ -36,7 +36,7 @@ export interface NodeRuntimeStatus {
 }
 export declare class NodeRuntimeError extends Error {
     readonly code: string;
-    constructor(code: string);
+    constructor(code: string, detail?: string);
 }
 /**
  * Owns identity/state and the existing security runtime, including its Python broker.
@@ -61,7 +61,8 @@ export declare class NodeRuntime {
     private serial;
     private preflight;
     private identity;
-    private readRoots;
+    /** Validate a proposed export without restarting transport or changing identity/state. */
+    validateRoots(input: string[]): Promise<string[]>;
     private stop;
     private prepareInternal;
     /** Idempotent startup. Reconciles exact roots and restarts if the registry changes. */

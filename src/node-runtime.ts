@@ -79,8 +79,8 @@ const errorMessages: Record<string, string> = {
 }
 
 export class NodeRuntimeError extends Error {
-  constructor(readonly code: string) {
-    super(errorMessages[code] || '安全节点运行时不可用（' + code + '）')
+  constructor(readonly code: string, detail?: string) {
+    super((errorMessages[code] || '安全节点运行时不可用（' + code + '）') + (detail ? ' ' + detail : ''))
     this.name = 'NodeRuntimeError'
   }
 }
@@ -102,10 +102,16 @@ async function privateDirectory(target: string, own = false): Promise<void> {
   let current = path.parse(target).root
   for (const part of target.slice(current.length).split(path.sep)) {
     current = path.join(current, part)
-    const st = await lstat(current)
-    requireThat(st.isDirectory() && !st.isSymbolicLink() && [0, process.getuid!()].includes(st.uid)
-      && !(st.mode & 0o022), 'UNTRUSTED_CONFIG_PATH')
-    if (current === target && own) requireThat(st.uid === process.getuid!(), 'ROOT_OWNER_REQUIRED')
+    let st
+    try { st = await lstat(current) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new NodeRuntimeError('INVALID_WORKSPACE_ROOT', '目录不存在：' + current)
+      throw error
+    }
+    const reason = st.isSymbolicLink() ? '是符号链接' : !st.isDirectory() ? '不是目录'
+      : ![0, process.getuid!()].includes(st.uid) ? '不属于当前用户或 root'
+      : st.mode & 0o022 ? '权限 ' + (st.mode & 0o777).toString(8).padStart(4, '0') + ' 允许其他用户写入；请移除组和其他用户的写权限后重试' : ''
+    if (reason) throw new NodeRuntimeError('UNTRUSTED_CONFIG_PATH', '目录「' + current + '」' + reason + '。')
+    if (current === target && own && st.uid !== process.getuid!()) throw new NodeRuntimeError('ROOT_OWNER_REQUIRED', '目录必须属于当前用户：' + current)
   }
 }
 
@@ -246,8 +252,9 @@ export class NodeRuntime {
     }
   }
 
-  private async readRoots(): Promise<string[]> {
-    const input = await this.options.getRoots()
+  /** Validate a proposed export without restarting transport or changing identity/state. */
+  async validateRoots(input: string[]): Promise<string[]> {
+    await this.preflight()
     requireThat(Array.isArray(input), 'INVALID_WORKSPACE_ROOT')
     const candidates = new Set<string>()
     for (const value of input) {
@@ -282,7 +289,7 @@ export class NodeRuntime {
       await this.options.keyStore.ensureReady()
       requireThat(!this.options.keyStore.degraded, 'KEY_STORE_UNAVAILABLE')
       await this.identity()
-      const roots = await this.readRoots()
+      const roots = await this.validateRoots(await this.options.getRoots())
       let reference = this.config?.dshRef
       if (refreshReference) {
         // Startup may precede tunnel discovery; only pairing requires a public locator.
