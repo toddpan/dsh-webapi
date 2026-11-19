@@ -74,6 +74,16 @@ export function registerModelRoutes(ctx: Context, router: any): void {
         data: {
           defaultModel: defaultSelection,
           models,
+          // 智能体团队协作能力位：宿主有 agentTeams 服务（DSH ≥0.2.2-rc.2）才开放；
+          // 三方控制台（WorkBuddy WEB/安卓）据此决定是否展示「团队协作」开关
+          teamModeSupported: (() => {
+            try {
+              const teams = (ctx as any).get ? ctx.get('agentTeams') : (ctx as any).agentTeams
+              return Boolean(teams && typeof teams.setEnabled === 'function')
+            } catch {
+              return false
+            }
+          })(),
         },
       })
     } catch (err: any) {

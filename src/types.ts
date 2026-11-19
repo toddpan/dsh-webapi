@@ -47,6 +47,8 @@ export interface SessionItem {
   }
   /** 模式预设（建会话时的 agentPreset；宿主元数据可读则回带，否则来自本插件运行时记录） */
   agentPreset?: string
+  /** 智能体团队协作状态：supported=宿主有 agentTeams 服务；enabled=根会话 team/mode 当前选择 */
+  teamMode?: { supported: boolean; enabled?: boolean }
 }
 
 export interface SessionCreateInput {
@@ -60,6 +62,8 @@ export interface SessionCreateInput {
   sessionId?: string
   /** 运行权限 preset（danger-full-access / workspace-write …），建会话后经 permissionPresets 原生生效 */
   permission?: string
+  /** 智能体团队协作（DSH ≥0.2.2-rc.2 agentTeams）：建会话后对根会话追加 team/mode 事件；旧引擎忽略 */
+  teamMode?: boolean
 }
 
 export interface SessionUpdateInput {
@@ -69,6 +73,8 @@ export interface SessionUpdateInput {
   reasoningEffort?: string
   /** 模式预设：宿主支持运行时应用则立即生效，否则仅记录并返回 applied:false（上层任务级持久化兜底） */
   agentPreset?: string
+  /** 智能体团队协作：运行时切换根会话 team/mode（DSH ≥0.2.2-rc.2；旧引擎返回 supported:false） */
+  teamMode?: boolean
 }
 
 export interface SessionPromptInput {

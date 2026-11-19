@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0 — 2026-11-19
+
+Agent-team collaboration support for third-party consoles (WorkBuddy WEB / Android).
+
+- `POST /sessions` accepts `teamMode: boolean`: after creating the session the plugin calls the host `agentTeams` service (`setEnabled`) to append the root session `team/mode` event, so the first turn already runs with agent-team guidance (DSH ≥0.2.2-rc.2). Older engines ignore the flag and return `data.teamMode.supported=false`.
+- `PUT /sessions/{id}` accepts `teamMode: boolean` for runtime switching of a live root session; the response reports `{supported, applied, enabled, reason}`.
+- `GET /sessions/{id}` now returns `teamMode: {supported, enabled?}` for console readback.
+- `GET /models` now returns `teamModeSupported` so consoles can decide whether to show the agent-team toggle per node engine.
+
+Validation: TypeScript typecheck and build; session-model regression suite remains green.
+
 ## 0.7.9 — 2026-11-17
 
 - Export package metadata and locale resources so DSH can display the installed plugin's name and feature description.
