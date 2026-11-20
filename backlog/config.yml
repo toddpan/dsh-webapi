@@ -1,0 +1,9 @@
+project_name: DSH Web API 插件
+default_status: "To Do"
+statuses: ["To Do", "In Progress", "Done"]
+labels: []
+date_format: yyyy-mm-dd
+default_editor: "vi"
+auto_open_browser: false
+default_port: 6420
+task_prefix: task
