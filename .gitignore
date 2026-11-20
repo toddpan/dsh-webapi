@@ -6,6 +6,7 @@ node_modules/
 *.bak-*
 
 # 本地工具产物 / 临时资料（不入库）
+.zcode/
 .dsh-vision-router/
 .v2c/
 .video_agent/
