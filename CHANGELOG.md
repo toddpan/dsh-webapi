@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.1 — 2026-11-20
+
+Validate WorkBuddy workspace roots before persisting them.
+
+- Saving workspace roots now validates the proposed directories before anything is persisted. Unsafe roots (symlinked, not owned by the current user, group/world-writable, or non-existent) are rejected with an actionable message, and the previously saved configuration, the node identity and the running binding stay untouched.
+- Directory-existence failures now report `INVALID_WORKSPACE_ROOT` instead of an opaque failure.
+
+Validation: TypeScript typecheck and build (compiled `lib/` reproduces byte-for-byte); node-runtime, ONENAT-tunnel and session-model regression suites green, including a new workspace-validation suite covering unsafe ancestors, symlinked roots, sensitive-directory overlap and missing roots. The node-onboarding E2E suite still cannot run locally because the sibling WorkBuddy backend checkout lacks the required fixture sources.
+
 ## 0.8.0 — 2026-11-19
 
 Agent-team collaboration support for third-party consoles (WorkBuddy WEB / Android).
